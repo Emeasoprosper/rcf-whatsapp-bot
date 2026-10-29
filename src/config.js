@@ -34,6 +34,11 @@ export const config = {
   // "Upload to the library" adverts. 0 turns them off.
   promoEveryHours: num(process.env.PROMO_EVERY_HOURS, 48),
   welcomeNewMembers: process.env.WELCOME_NEW_MEMBERS !== 'false',
+  // These and most switches here can also be changed live from the admin
+  // app (WhatsApp Bot page > Settings), see liveSettings.js.
+  birthdayWishes: true,
+  newMonthWishes: true,
+  reactions: true,
   // Join a lively discussion without being tagged, when the AI thinks it can
   // genuinely help. At most once per cooldown per group.
   chimeIn: process.env.CHIME_IN !== 'false',

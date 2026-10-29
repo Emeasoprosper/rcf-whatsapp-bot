@@ -6,6 +6,7 @@ import { remember, lastHumanMessageAt } from './chatMemory.js'
 import { botApi } from './backend.js'
 import { allowedGroups, isAllowedGroup } from './groups.js'
 import { askNewMonthWish } from './ai.js'
+import { logActivity } from './activity.js'
 
 // Things the bot posts on its own: admin announcements (ticked "post to
 // WhatsApp" in the admin app), "upload to the library" adverts, and
@@ -81,6 +82,7 @@ async function pollAnnouncements(getSock) {
       await botApi(`/announcements/${item.id}/posted`, { method: 'POST', body: {} })
       imageFailures.delete(item.id)
       console.log(`[post] Announcement "${item.title}" posted to ${allowedGroups().length} group(s)`)
+      logActivity('announcement', null, `Posted "${item.title}" to ${allowedGroups().length} group(s)`)
     }
   } catch (err) {
     console.error('Announcement check failed:', err.message)
@@ -136,6 +138,7 @@ async function maybePostPromo(getSock) {
       await send(sock, jid, image ? { image: { url: image }, caption: text } : { text }, text)
       lastPromo[jid] = Date.now()
       console.log(`[promo] Upload advert posted in ${jid}${image ? ` with ${image}` : ''}`)
+      logActivity('promo', jid, text.split('\n')[0])
     } catch (err) {
       console.error('Promo post failed:', err.message)
     }
@@ -167,6 +170,7 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
   const sock = getSock()
   const { year, monthName, day, hour } = lagosToday()
   if (!sock) return
+  if (!test && !config.newMonthWishes) return
   if (!test && (day !== 1 || hour < NEW_MONTH_FROM_HOUR || !isActiveHours())) return
 
   const key = `${year}-${monthName}`
@@ -193,6 +197,7 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
       await send(sock, jid, { text }, text)
       if (!test) done[jid] = key
       console.log(`[new-month] ${test ? 'TEST: ' : ''}Posted ${monthName} greeting in ${jid}${selfAware ? ' (with the bot wink)' : ''}`)
+      logActivity('new-month', jid, text)
     } catch (err) {
       console.error('New month post failed:', err.message)
     }
@@ -221,10 +226,41 @@ export function queueWelcome(getSock, groupId, memberIds) {
     const text = `Welcome to the family, ${tags}! 🎉🙏\n\nI'm *${config.botName}* from the RCF Library Department. Need a textbook, past question or notes? Just tag me or ask here, e.g. *Bro Paul, GST 101 past questions*.\n\n📚 Library: ${config.siteUrl}\n📤 Share your materials: ${config.siteUrl}/contribute/submit`
     try {
       await send(sock, groupId, { text, mentions: ids }, text)
+      logActivity('welcome', groupId, `Welcomed ${ids.length} new member${ids.length === 1 ? '' : 's'}`)
     } catch (err) {
       console.error('Welcome message failed:', err.message)
     }
   }, WELCOME_BATCH_MS)
+}
+
+// ---------- Send as Bro Paul (Control Center) ----------
+
+const OUTBOX_POLL_MS = 20 * 1000
+let sendingOutbox = false
+
+// A superadmin typed a message in the admin app. Sent any time of day,
+// since a person chose to send it now.
+async function sendOutbox(getSock) {
+  const sock = getSock()
+  if (sendingOutbox || !sock) return
+  sendingOutbox = true
+  try {
+    const { items = [] } = await botApi('/outbox')
+    for (const item of items) {
+      try {
+        await send(sock, item.group_jid, { text: item.text }, item.text)
+        await botApi(`/outbox/${item.id}`, { method: 'POST', body: { status: 'sent' } })
+        logActivity('send', item.group_jid, `Admin message: ${item.text}`)
+      } catch (err) {
+        await botApi(`/outbox/${item.id}`, { method: 'POST', body: { status: 'failed', error: err.message } }).catch(() => {})
+        console.error('Outbox send failed:', err.message)
+      }
+    }
+  } catch {
+    // Backend asleep: try again next round.
+  } finally {
+    sendingOutbox = false
+  }
 }
 
 // ---------- Start ----------
@@ -242,8 +278,12 @@ export function startPoster(getSock) {
     console.log('[setup] BOT_API_KEY not set, so admin announcements will not be posted to WhatsApp.')
   }
 
-  if (config.promoEveryHours) {
-    setInterval(() => maybePostPromo(getSock), PROMO_CHECK_MS)
+  // Always scheduled: the advert interval can be switched on later from the
+  // admin app, and maybePostPromo checks it each time.
+  setInterval(() => maybePostPromo(getSock), PROMO_CHECK_MS)
+
+  if (config.botApiKey) {
+    setInterval(() => sendOutbox(getSock), OUTBOX_POLL_MS)
   }
 
   setInterval(() => maybeNewMonthWish(getSock).catch((err) => console.error('New month check failed:', err.message)), PROMO_CHECK_MS)

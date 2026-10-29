@@ -3,6 +3,7 @@ import { config, isActiveHours } from './config.js'
 import { searchLibrary } from './library.js'
 import { askAi, askChimeIn } from './ai.js'
 import { activity, recentChat } from './chatMemory.js'
+import { liveFacts } from './liveSettings.js'
 
 let knowledgeEntries = []
 try {
@@ -11,6 +12,9 @@ try {
 } catch {
   knowledgeEntries = []
 }
+
+// knowledge.json plus the RCF facts saved in the admin app's Control Center.
+const allKnowledge = () => [...knowledgeEntries, ...liveFacts()]
 
 const MATERIAL_WORDS = /\b(past\s*questions?|p\.?q|textbooks?|books?|pdfs?|materials?|notes?|lectures?|handouts?|resources?|audio|sermons?|devotionals?|manuals?|slides?)\b/i
 const REQUEST_WORDS = /\b(need|needs|want|looking\s+for|search(?:ing)?|where|anyone|anybody|send|share|help|please|pls|plz|kindly|do\s+we\s+have|is\s+there|can\s+i\s+get|does\s+anyone)\b/i
@@ -136,7 +140,7 @@ async function aiReply(text, { senderName, history }) {
   if (!aiAllowed()) return "I've reached my answer limit for today. Please try again tomorrow or ask an admin."
   aiCount += 1
   try {
-    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries })
+    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge() })
     // The AI decided the member is asking for a material: look it up for real.
     if (result.type === 'search') return await resourceReply(result.query)
     return result.text
@@ -168,7 +172,7 @@ export async function maybeChimeIn(groupId) {
   lastChimeAt.set(groupId, now)
   try {
     aiCount += 1
-    const text = await askChimeIn({ history: recentChat(groupId), knowledgeEntries })
+    const text = await askChimeIn({ history: recentChat(groupId), knowledgeEntries: allKnowledge() })
     return text ? text.slice(0, 1200) : null
   } catch (err) {
     console.error('Chime-in failed:', err.message)

@@ -14,6 +14,8 @@ import { setStatus, startHeartbeat, currentStatus } from './status.js'
 import { HEART, isThanksOnly, isBirthdayWish, shouldReact } from './reactions.js'
 import { handleBirthdayWish } from './birthday.js'
 import { initState } from './state.js'
+import { startLiveSettings } from './liveSettings.js'
+import { startActivityLog, logActivity } from './activity.js'
 
 const QR_FILE = 'qr.png'
 const GROUP_REFRESH_MS = 60 * 1000
@@ -74,8 +76,15 @@ async function onMessage(sock, m) {
 
   const fromMe = Boolean(m.key.fromMe)
   const hasDocument = Boolean(msg.documentMessage || msg.documentWithCaptionMessage)
-  const react = () =>
-    sock.sendMessage(jid, { react: { text: HEART, key: m.key } }).catch((err) => console.error('React failed:', err.message))
+  const react = async () => {
+    if (!config.reactions) return
+    try {
+      await sock.sendMessage(jid, { react: { text: HEART, key: m.key } })
+      logActivity('react', jid, `🤍 on ${m.pushName || 'a member'}'s message`)
+    } catch (err) {
+      console.error('React failed:', err.message)
+    }
+  }
 
   const text = readText(msg)
   if (!text) {
@@ -101,7 +110,7 @@ async function onMessage(sock, m) {
     return
   }
 
-  if (!fromMe && isBirthdayWish(text)) {
+  if (!fromMe && config.birthdayWishes && isBirthdayWish(text)) {
     if (shouldReact(jid, { text, birthday: true })) await react()
     handleBirthdayWish({
       groupId: jid,
@@ -114,6 +123,7 @@ async function onMessage(sock, m) {
         if (!live) return
         await live.sendMessage(jid, content)
         remember(jid, { text: content.text, fromBot: true })
+        logActivity('birthday', jid, content.text)
       },
     })
     return
@@ -134,6 +144,8 @@ async function onMessage(sock, m) {
   if (reply) {
     await sock.sendMessage(jid, { text: reply }, { quoted: m })
     remember(jid, { text: reply, fromBot: true })
+    const kind = /^Here's what I found|^I couldn't find/.test(reply) ? 'search' : 'reply'
+    logActivity(kind, jid, `${senderName || 'Member'}: "${text.slice(0, 80)}" → ${reply.slice(0, 120)}`)
     return
   }
 
@@ -143,6 +155,7 @@ async function onMessage(sock, m) {
     await sock.sendMessage(jid, { text: chime })
     remember(jid, { text: chime, fromBot: true })
     console.log(`[chime] Joined the discussion in ${jid}`)
+    logActivity('chime', jid, chime)
     return
   }
 
@@ -249,4 +262,6 @@ if (process.env.PORT) {
 process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason))
 
 await initState()
+await startLiveSettings()
+startActivityLog()
 start()
