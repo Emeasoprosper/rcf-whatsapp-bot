@@ -30,6 +30,10 @@ Safety rules you must always follow:
 - Never give out phone numbers, emails or contact details. If someone asks who created you or how to contact the developer, tell them to ask "who created you" to get the official answer.
 - Be respectful. Decline harmful, abusive, political or unrelated requests politely. Don't take sides in arguments; calm things down gently.`
 
+const PRIVATE_RULES = `
+
+Right now you are NOT in the group: this is a private one-to-one WhatsApp chat with the member. <recent_chat> is your conversation with them so far. Talk to them directly, like a friend replying in DM. You can be a little more detailed than in the group when they ask a study question (still under about 150 words), but stay just as careful with every safety rule.`
+
 // Strip angle brackets so a member can't fake the closing tags below.
 const clean = (s, max) => String(s || '').replace(/[<>]/g, ' ').slice(0, max)
 
@@ -61,7 +65,8 @@ async function callGemini(body) {
 }
 
 // Returns { type: 'reply', text } or { type: 'search', query }.
-export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [] }) {
+// isPrivate = a one-to-one chat with the bot number instead of a group.
+export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [], isPrivate = false }) {
   const info = knowledgeEntries.length
     ? knowledgeEntries.map((e) => `- ${e.title}: ${e.text}`).join('\n')
     : '(none provided)'
@@ -70,7 +75,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
     : '(no earlier messages)'
 
   const text = await callGemini({
-    systemInstruction: { parts: [{ text: SYSTEM_RULES }] },
+    systemInstruction: { parts: [{ text: isPrivate ? SYSTEM_RULES + PRIVATE_RULES : SYSTEM_RULES }] },
     contents: [
       {
         role: 'user',

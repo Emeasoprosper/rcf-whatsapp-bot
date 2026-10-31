@@ -21,6 +21,7 @@ function apply(settings = {}) {
   set('birthdayWishes', settings.birthdayWishes)
   set('newMonthWishes', settings.newMonthWishes)
   set('reactions', settings.reactions)
+  set('privateChats', settings.privateChats)
   set('promoEveryHours', settings.promoEveryHours)
   set('activeFromHour', settings.activeFromHour)
   set('activeToHour', settings.activeToHour)

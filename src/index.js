@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { config } from './config.js'
-import { handleMessage, maybeChimeIn } from './handler.js'
+import { handleMessage, handlePrivateMessage, maybeChimeIn } from './handler.js'
 import { remember, recentChat } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
@@ -52,9 +52,43 @@ function readContext(msg) {
   )
 }
 
+// One-to-one chat (phone number or WhatsApp's newer @lid ids). Status
+// updates, channels and broadcast lists are not chats and are ignored.
+const isPrivateChat = (jid) => /@(s\.whatsapp\.net|lid)$/.test(jid)
+
+async function onPrivateMessage(sock, m, jid) {
+  if (!config.privateChats || m.key.fromMe) return
+  const msg = unwrap(m.message)
+  if (!msg) return
+  const text = readText(msg)
+  if (!text) return
+
+  const senderName = m.pushName || ''
+  const history = recentChat(jid)
+  remember(jid, { name: senderName, text })
+
+  if (isThanksOnly(text)) {
+    if (config.reactions) await sock.sendMessage(jid, { react: { text: HEART, key: m.key } }).catch(() => {})
+    return
+  }
+
+  // Blue ticks + "typing…" while the AI thinks, like a real person.
+  sock.readMessages([m.key]).catch(() => {})
+  sock.sendPresenceUpdate('composing', jid).catch(() => {})
+  const reply = await handlePrivateMessage({ id: m.key.id, senderId: jid, senderName, text, history })
+  sock.sendPresenceUpdate('paused', jid).catch(() => {})
+  if (!reply) return
+
+  await sock.sendMessage(jid, { text: reply })
+  remember(jid, { text: reply, fromBot: true })
+  // Private chats stay private: the admin Activity tab only sees that one happened.
+  logActivity('private', null, 'Answered a private chat')
+}
+
 async function onMessage(sock, m) {
   const jid = m.key?.remoteJid
-  if (!jid || !jid.endsWith('@g.us')) return // groups only
+  if (jid && isPrivateChat(jid)) return onPrivateMessage(sock, m, jid)
+  if (!jid || !jid.endsWith('@g.us')) return
   const msg = unwrap(m.message)
   if (!msg) return
 

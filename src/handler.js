@@ -136,11 +136,11 @@ async function resourceReply(text) {
   }
 }
 
-async function aiReply(text, { senderName, history }) {
+async function aiReply(text, { senderName, history, isPrivate = false }) {
   if (!aiAllowed()) return "I've reached my answer limit for today. Please try again tomorrow or ask an admin."
   aiCount += 1
   try {
-    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge() })
+    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate })
     // The AI decided the member is asking for a material: look it up for real.
     if (result.type === 'search') return await resourceReply(result.query)
     return result.text
@@ -180,6 +180,43 @@ export async function maybeChimeIn(groupId) {
   } finally {
     chimeBusy.delete(groupId)
   }
+}
+
+// AI answers each person has had in private chat today: senderId -> { day, n }.
+const privateUse = new Map()
+
+function privateLimitReached(senderId) {
+  const today = lagosDay()
+  const used = privateUse.get(senderId)
+  const n = used?.day === today ? used.n : 0
+  if (privateUse.size > 5000) privateUse.clear()
+  privateUse.set(senderId, { day: today, n: n + 1 })
+  return n >= config.privateDailyLimit ? n : false
+}
+
+// A one-to-one chat with the bot number. Every message is for the bot, so no
+// tag is needed. Returns a reply string, or null to stay silent.
+export async function handlePrivateMessage(msg) {
+  if (!msg || msg.fromMe || !msg.text || !msg.id) return null
+  if (alreadySeen(msg.id)) return null
+  const text = msg.text.trim()
+  if (!text) return null
+
+  if (CREATOR_QUESTION.test(text)) return creatorReply()
+  if (INTRO_WORDS.test(text) && /who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)/i.test(text)) return introReply()
+
+  const over = privateLimitReached(msg.senderId)
+  if (over !== false) {
+    // Say it once, then stay quiet until tomorrow.
+    return over === config.privateDailyLimit
+      ? `We've talked a lot today 😄 I've reached my limit for private chats. Let's continue tomorrow! Meanwhile, search the library yourself: ${config.siteUrl}`
+      : null
+  }
+
+  const reply = looksLikeResourceRequest(text)
+    ? await resourceReply(text)
+    : await aiReply(text, { senderName: msg.senderName, history: msg.history || [], isPrivate: true })
+  return reply ? reply.slice(0, 1800) : null
 }
 
 // msg = { id, senderId, senderName, text, isGroup, fromMe, mentionedBot, repliedToBot, history }

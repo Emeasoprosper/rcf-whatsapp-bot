@@ -43,6 +43,11 @@ export const config = {
   // genuinely help. At most once per cooldown per group.
   chimeIn: process.env.CHIME_IN !== 'false',
   chimeCooldownMs: num(process.env.CHIME_IN_COOLDOWN_MINUTES, 60) * 60 * 1000,
+  // Answer people who message the bot number directly (one-to-one chats).
+  // Each person gets this many AI answers a day there, so nobody can use up
+  // the shared daily limit on their own.
+  privateChats: process.env.PRIVATE_CHATS !== 'false',
+  privateDailyLimit: num(process.env.PRIVATE_DAILY_LIMIT, 30),
   chimeMinMessages: 8,
   chimeMinPeople: 3,
   chimeWindowMs: 10 * 60 * 1000,
