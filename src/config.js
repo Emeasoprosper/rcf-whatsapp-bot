@@ -38,6 +38,8 @@ export const config = {
   // app (WhatsApp Bot page > Settings), see liveSettings.js.
   birthdayWishes: true,
   newMonthWishes: true,
+  // Verse of the day + study tip in every group each morning from 7am.
+  morningPost: process.env.MORNING_POST !== 'false',
   reactions: true,
   // Join a lively discussion without being tagged, when the AI thinks it can
   // genuinely help. At most once per cooldown per group.

@@ -205,6 +205,71 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
   if (!test) setState('newMonthPosted', done)
 }
 
+// ---------- Morning verse and study tip ----------
+
+// Posted from 7am (Lagos). If the bot was offline at 7, it still posts when
+// it's back, but not after noon: a "good morning" at 4pm would look odd.
+const MORNING_FROM_HOUR = 7
+const MORNING_UNTIL_HOUR = 12
+
+function morningMessage({ verse, tip }) {
+  const weekday = new Date().toLocaleDateString('en-GB', { timeZone: 'Africa/Lagos', weekday: 'long' })
+  return [
+    `☀️ *Good morning, family! Happy ${weekday}.*`,
+    '',
+    '📖 *Verse of the day*',
+    `"${verse.text}"`,
+    `— *${verse.ref}*`,
+    '',
+    '💡 *Study tip*',
+    tip.text,
+    '',
+    `Have a blessed day 🙏 More books, notes and past questions: ${config.siteUrl}`,
+  ].join('\n')
+}
+
+// test = FORCE_MORNING=1 at startup: post right now, only to the groups in
+// ALLOWED_GROUP_JID (your test group), and don't count it.
+async function maybeMorningPost(getSock, { test = false } = {}) {
+  const sock = getSock()
+  if (!sock || !config.botApiKey) return
+  if (!test && !config.morningPost) return
+  const { year, monthName, day, hour } = lagosToday()
+  if (!test && (hour < MORNING_FROM_HOUR || hour >= MORNING_UNTIL_HOUR)) return
+
+  const key = `${year}-${monthName}-${day}`
+  const done = getState('morningPosted', {})
+  const due = test ? config.allowedGroups : allowedGroups().filter((jid) => done[jid] !== key)
+  if (due.length === 0) {
+    if (test) console.log('[morning] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
+    return
+  }
+
+  // Same verse and tip as the app and the 7am phone push. Backend asleep:
+  // try again on the next check.
+  let text
+  try {
+    text = morningMessage(await botApi('/daily'))
+  } catch (err) {
+    console.error('Morning post: could not get today\'s verse yet:', err.message)
+    return
+  }
+
+  for (const jid of due) {
+    try {
+      await send(sock, jid, { text }, text)
+      if (!test) {
+        done[jid] = key
+        setState('morningPosted', done)
+      }
+      console.log(`[morning] ${test ? 'TEST: ' : ''}Posted verse and tip in ${jid}`)
+      logActivity('morning', jid, text.split('\n').slice(3, 5).join(' '))
+    } catch (err) {
+      console.error('Morning post failed:', err.message)
+    }
+  }
+}
+
 // ---------- Welcome new members ----------
 
 const pendingWelcomes = new Map()
@@ -287,6 +352,16 @@ export function startPoster(getSock) {
   }
 
   setInterval(() => maybeNewMonthWish(getSock).catch((err) => console.error('New month check failed:', err.message)), PROMO_CHECK_MS)
+
+  // Every 10 minutes, plus once shortly after connecting, so a restart
+  // during the morning still gets today's post out promptly.
+  const morning = () => maybeMorningPost(getSock).catch((err) => console.error('Morning check failed:', err.message))
+  setInterval(morning, PROMO_CHECK_MS)
+  setTimeout(morning, 30 * 1000)
+  if (process.env.FORCE_MORNING) {
+    console.log('[morning] Test mode: posting the morning verse to your test group in 20 seconds...')
+    setTimeout(() => maybeMorningPost(getSock, { test: true }).catch((err) => console.error('Morning test failed:', err.message)), 20 * 1000)
+  }
 
   if (process.env.FORCE_NEW_MONTH) {
     console.log('[new-month] Test mode: posting a new-month wish to your test group in 20 seconds...')

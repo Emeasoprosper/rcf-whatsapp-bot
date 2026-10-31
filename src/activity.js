@@ -6,7 +6,7 @@ import { botApi } from './backend.js'
 const FLUSH_MS = 30 * 1000
 let queue = []
 
-// kind: reply | search | chime | birthday | new-month | promo | announcement | welcome | react | send | private
+// kind: reply | search | chime | birthday | new-month | promo | announcement | welcome | react | send | private | morning
 export function logActivity(kind, groupJid, summary) {
   if (!config.botApiKey) return
   queue.push({ kind, groupJid, summary: String(summary).replace(/\s+/g, ' ').slice(0, 280) })
