@@ -29,7 +29,23 @@ const STOPWORDS = new Set((
   'slide slides dear guys everyone good morning afternoon evening bot assistant hi hello hey thanks thank it its'
 ).split(' '))
 
-const CREATOR_QUESTION = /\b(who\s+(created|made|built|developed|designed|owns?|programmed)\s+(you|this|bro\s*paul)|your\s+(creator|developer|maker|owner)|who\s+is\s+your\s+(creator|developer|maker|owner)|contact\s+(info|information|details?|number)|(developer|admin|creator)\s+(contact|number|whatsapp)|how\s+(can|do)\s+i\s+(contact|reach)\s+(you|the\s+(developer|creator)))\b/i
+// "Who created you" and "contact of your dev", including common typos
+// (carted, creared), short forms (dev) and follow-ups ("his contact").
+const MAKER = '(creator|developer|dev|maker|owner|programmer|builder|designer)'
+const CONTACT = '(contact|contacts|number|phone|line|whatsapp|details?|info)'
+const CREATOR_QUESTION = new RegExp(
+  [
+    `who\\s+(cr\\w*ted|cr\\w*ed|carted|made|built|buit|developed|designed|owns?|programm?ed|coded|invented)\\s+(you|u|bro\\s*paul|this\\s+(bot|ai|app|assistant|thing))`,
+    `who\\s+(is|dey)\\s+behind\\s+(you|u|bro\\s*paul|this\\s+(bot|ai|app|assistant|thing))`,
+    `(your|ur|the)\\s+${MAKER}`,
+    `${MAKER}'?s?\\s+${CONTACT}`,
+    `${CONTACT}\\s+(of|for)\\s+(your|ur|the|this)\\s+${MAKER}`,
+    `(his|her|their)\\s+${CONTACT}`,
+    `contact\\s+(info|information|details?|number)`,
+    `how\\s+(can|do)\\s+i\\s+(contact|reach)\\s+(you|u|the\\s+${MAKER})`,
+  ].join('|'),
+  'i'
+)
 
 function waLink() {
   const digits = config.creatorPhone.replace(/\D/g, '')
