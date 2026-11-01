@@ -4,6 +4,7 @@ import { searchLibrary } from './library.js'
 import { askAi, askChimeIn } from './ai.js'
 import { activity, recentChat } from './chatMemory.js'
 import { liveFacts } from './liveSettings.js'
+import { parseLevelRequest, levelLabel, findCoursesAtLevel, formatItems, courseMenu, rememberMenu, hasPendingMenu, answerMenu } from './levelSearch.js'
 
 let knowledgeEntries = []
 try {
@@ -30,10 +31,33 @@ const STOPWORDS = new Set((
 
 const CREATOR_QUESTION = /\b(who\s+(created|made|built|developed|designed|owns?|programmed)\s+(you|this|bro\s*paul)|your\s+(creator|developer|maker|owner)|who\s+is\s+your\s+(creator|developer|maker|owner)|contact\s+(info|information|details?|number)|(developer|admin|creator)\s+(contact|number|whatsapp)|how\s+(can|do)\s+i\s+(contact|reach)\s+(you|the\s+(developer|creator)))\b/i
 
-function creatorReply() {
+function waLink() {
   const digits = config.creatorPhone.replace(/\D/g, '')
-  const intl = digits.startsWith('0') ? `234${digits.slice(1)}` : digits
-  return `I'm *${config.botName}*, the RCF MOUAU Library Assistant 📚\n\nI was created by *${config.creatorName}* — ${config.creatorSkills}.\nFor contact or support, reach the developer on WhatsApp: ${config.creatorPhone}\nhttps://wa.me/${intl}`
+  return `https://wa.me/${digits.startsWith('0') ? `234${digits.slice(1)}` : digits}`
+}
+
+function creatorReply() {
+  return `I'm *${config.botName}*, the RCF MOUAU Library Assistant 📚\n\nI was created by *${config.creatorName}* — ${config.creatorSkills}.\nFor contact or support, reach the developer on WhatsApp: ${config.creatorPhone}\n${waLink()}`
+}
+
+// A real business enquiry: a deal, partnership, advert, sponsorship or a job,
+// aimed at the bot, its owner or the library. Both parts are needed, so
+// "big deal" or "my business class" in normal chat doesn't trigger it.
+const BUSINESS_WORDS = /\b((make|strike|close|discuss|do|have)\s+(a\s+)?deal|deal\s+with|business|partner(ship)?|collaborat\w*|sponsor\w*|advertis\w*|adverts?|promote\s+(my|our)|hire|work\s+with|invest\w*|proposal|contract|website|web\s*app|mobile\s+app|(a|my|our)\s+bot)\b/i
+const BUSINESS_TARGET = /\b(you|your|owner|boss|developer|creator|admin|team|library|whoever|person\s+behind)\b/i
+const CONTACT_OWNER = /\b(contact|reach|talk\s+to|speak\s+(to|with)|meet|number\s+of)\s+(the\s+|your\s+)?(owner|boss|developer|creator|admin|team|management|person\s+behind)\b/i
+
+function isBusinessEnquiry(text) {
+  const t = stripMentions(text) // the bot's own name doesn't count as the target
+  return CONTACT_OWNER.test(t) || (BUSINESS_WORDS.test(t) && BUSINESS_TARGET.test(t))
+}
+
+function businessReply() {
+  return (
+    `Happy to connect you! 🤝\n\nFor partnerships, adverts, sponsorship, projects or any business with the RCF MOUAU Library, please contact the developer directly:\n\n` +
+    `*${config.creatorName}* — ${config.creatorSkills}\n📞 ${config.creatorPhone}\n💬 ${waLink()}\n\n` +
+    `Send a short message saying who you are and what you have in mind.`
+  )
 }
 
 const INTRO_WORDS = /\b(introduc(e|ing)|meet|welcome|who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)|new\s+(library\s+)?(dept|department)\s+member)\b/i
@@ -86,6 +110,15 @@ function looksLikeResourceRequest(text) {
   return REQUEST_WORDS.test(text) && (MATERIAL_WORDS.test(text) || hasCode)
 }
 
+// "maths 200lv", "200 level past questions": a level plus a subject or a
+// kind of material. Untagged group messages also need a request word
+// ("anyone has...") so normal chat about levels doesn't trigger a search.
+function looksLikeLevelRequest(text, { tagged }) {
+  const ask = parseLevelRequest(text)
+  if (!ask || !(ask.subject || ask.prefix || MATERIAL_WORDS.test(text))) return false
+  return tagged || REQUEST_WORDS.test(text)
+}
+
 function detectType(text) {
   if (/past\s*questions?|\bp\.?q\b/i.test(text)) return 'past_question'
   if (/\baudio\b|\bsermons?\b/i.test(text)) return 'audio'
@@ -115,7 +148,33 @@ function courseCodeOnly(query) {
   return m ? `${m[1].toUpperCase()} ${m[2]}` : null
 }
 
-async function resourceReply(text) {
+// "Maths 200lv" and the like: list that level's courses (or show them
+// straight away when there are only a few) and remember the list so the
+// member can answer "first 3", "2" or "MTH 222".
+async function levelReply(text, ask, senderId) {
+  const type = detectType(text)
+  const label = levelLabel(ask)
+  try {
+    let courses = await findCoursesAtLevel(ask, { type })
+    if (courses.length === 0 && type) courses = await findCoursesAtLevel(ask)
+    if (courses.length === 0) {
+      return `I don't have ${label} materials in the library yet 😔\n\n📝 Request one: ${config.siteUrl}/contribute/request\n📤 Have some? Please upload them so others can benefit: ${config.siteUrl}/contribute/submit`
+    }
+    const total = courses.reduce((n, c) => n + c.items.length, 0)
+    if (courses.length === 1 || total <= 3) {
+      return formatItems(courses.flatMap((c) => c.items).slice(0, 8), `Here's what I have for ${label}:`)
+    }
+    rememberMenu(senderId, courses, label)
+    return courseMenu(courses, label)
+  } catch (err) {
+    console.error('Level search failed:', err.message)
+    return 'The library is slow to respond right now. Please try again in a minute.'
+  }
+}
+
+async function resourceReply(text, senderId = '') {
+  const ask = parseLevelRequest(stripMentions(text))
+  if (ask) return levelReply(text, ask, senderId)
   const query = extractSearchQuery(stripMentions(text))
   if (!query) return 'Tell me the course code or the title, e.g. *GST 101 past questions*.'
 
@@ -136,13 +195,15 @@ async function resourceReply(text) {
   }
 }
 
-async function aiReply(text, { senderName, history, isPrivate = false }) {
+async function aiReply(text, { senderName, senderId = '', history, isPrivate = false }) {
   if (!aiAllowed()) return "I've reached my answer limit for today. Please try again tomorrow or ask an admin."
   aiCount += 1
   try {
     const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate })
     // The AI decided the member is asking for a material: look it up for real.
-    if (result.type === 'search') return await resourceReply(result.query)
+    if (result.type === 'search') return await resourceReply(result.query, senderId)
+    // The AI recognised a business enquiry or a request for the owner's contact.
+    if (result.type === 'contact') return businessReply()
     return result.text
   } catch (err) {
     console.error('AI reply failed:', err.message)
@@ -202,8 +263,13 @@ export async function handlePrivateMessage(msg) {
   const text = msg.text.trim()
   if (!text) return null
 
+  if (isBusinessEnquiry(text)) return businessReply()
   if (CREATOR_QUESTION.test(text)) return creatorReply()
   if (INTRO_WORDS.test(text) && /who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)/i.test(text)) return introReply()
+
+  // Answer to a course list Bro Paul just sent ("first 3", "2", "MTH 222").
+  const picked = answerMenu(msg.senderId, text)
+  if (picked) return picked
 
   const over = privateLimitReached(msg.senderId)
   if (over !== false) {
@@ -213,9 +279,9 @@ export async function handlePrivateMessage(msg) {
       : null
   }
 
-  const reply = looksLikeResourceRequest(text)
-    ? await resourceReply(text)
-    : await aiReply(text, { senderName: msg.senderName, history: msg.history || [], isPrivate: true })
+  const reply = looksLikeResourceRequest(text) || looksLikeLevelRequest(text, { tagged: true })
+    ? await resourceReply(text, msg.senderId)
+    : await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], isPrivate: true })
   return reply ? reply.slice(0, 1800) : null
 }
 
@@ -236,6 +302,16 @@ export async function handleMessage(msg) {
     Boolean(msg.repliedToBot) ||
     (config.botMode !== 'tag_only' && addressedByName(text))
 
+  // Answer to a course list Bro Paul just sent this person ("first 3", "2",
+  // "MTH 222"). Taken when they tag/reply, or when it's a short message.
+  if (hasPendingMenu(msg.senderId) && (tagged || text.length <= 40)) {
+    const picked = answerMenu(msg.senderId, text)
+    if (picked) {
+      senderLastTagged.set(msg.senderId, Date.now())
+      return picked.slice(0, 1800)
+    }
+  }
+
   const introWords = INTRO_WORDS.test(text)
   const nameIntro = config.botMode !== 'tag_only' && introWords && BOT_NAME.test(text)
   if ((tagged && introWords) || nameIntro) {
@@ -246,7 +322,7 @@ export async function handleMessage(msg) {
     }
     if (!tagged) return null
   }
-  const isRequest = looksLikeResourceRequest(text)
+  const isRequest = looksLikeResourceRequest(text) || looksLikeLevelRequest(text, { tagged })
   const now = Date.now()
 
   if (tagged) {
@@ -258,12 +334,14 @@ export async function handleMessage(msg) {
   }
 
   const reply =
-    tagged && CREATOR_QUESTION.test(text)
-      ? creatorReply()
-      : isRequest
-        ? await resourceReply(text)
+    tagged && isBusinessEnquiry(text)
+      ? businessReply()
+      : tagged && CREATOR_QUESTION.test(text)
+        ? creatorReply()
+        : isRequest
+        ? await resourceReply(text, msg.senderId)
         : tagged
-          ? await aiReply(text, { senderName: msg.senderName, history: msg.history || [] })
+          ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [] })
           : null
   if (!reply) return null
 

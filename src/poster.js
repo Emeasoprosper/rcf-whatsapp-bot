@@ -7,6 +7,7 @@ import { botApi } from './backend.js'
 import { allowedGroups, isAllowedGroup } from './groups.js'
 import { askNewMonthWish } from './ai.js'
 import { logActivity } from './activity.js'
+import { quoteCard, HANDLE } from './quoteImage.js'
 
 // Things the bot posts on its own: admin announcements (ticked "post to
 // WhatsApp" in the admin app), "upload to the library" adverts, and
@@ -247,17 +248,36 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
 
   // Same verse and tip as the app and the 7am phone push. Backend asleep:
   // try again on the next check.
-  let text
+  let daily
   try {
-    text = morningMessage(await botApi('/daily'))
+    daily = await botApi('/daily')
   } catch (err) {
     console.error('Morning post: could not get today\'s verse yet:', err.message)
     return
   }
+  const text = morningMessage(daily)
+
+  // The verse and the tip as square cards, like the app shows them. Drawn
+  // once in memory for all groups and never saved. If drawing fails, the
+  // plain text message still goes out.
+  let cards = null
+  try {
+    cards = await Promise.all([
+      quoteCard({ kind: 'verse', label: 'Verse of the day', quote: daily.verse.text, by: daily.verse.ref }),
+      quoteCard({ kind: 'tip', label: 'Study tip of the day', quote: daily.tip.text, by: 'RCF Library' }),
+    ])
+  } catch (err) {
+    console.error('Morning cards could not be drawn, sending text only:', err.message)
+  }
 
   for (const jid of due) {
     try {
-      await send(sock, jid, { text }, text)
+      if (cards) {
+        await send(sock, jid, { image: cards[0], caption: text }, text)
+        await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
+      } else {
+        await send(sock, jid, { text }, text)
+      }
       if (!test) {
         done[jid] = key
         setState('morningPosted', done)

@@ -17,10 +17,10 @@ async function fetchJson(url, timeoutMs) {
 
 // Calls your existing public route: GET /api/resources (rcf-library-backend/src/routes/resources.js).
 // Only approved resources come back. Links are built here from real ids, never by the AI.
-export async function searchLibrary(searchText, { type } = {}) {
+export async function searchLibrary(searchText, { type, pageSize = config.maxResults } = {}) {
   const params = new URLSearchParams({
     search: searchText,
-    pageSize: String(config.maxResults),
+    pageSize: String(pageSize),
   })
   if (type) params.set('type', type)
   const url = `${config.backendUrl}/api/resources?${params.toString()}`

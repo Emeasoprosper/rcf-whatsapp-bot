@@ -61,7 +61,7 @@ export const config = {
   botName: 'Bro Paul',
   creatorName: process.env.CREATOR_NAME || 'Emeaso Prosper',
   creatorPhone: process.env.CREATOR_PHONE || '08069305651',
-  creatorSkills: 'Web Developer   · Data Analyst· Graphic Designer· Video Editor',
+  creatorSkills: 'Web Developer · Data Analyst · Graphic Designer · Video Editor',
 }
 
 export function lagosHour() {

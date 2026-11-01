@@ -1,0 +1,10 @@
+Fonts used to draw the morning verse and study tip images (src/quoteImage.js).
+Bundled here because the server may have no fonts installed.
+
+- Playfair Display Bold (PlayfairDisplay-Bold.ttf), copyright the Playfair Display Project Authors
+- Inter SemiBold and Bold (Inter-SemiBold.ttf, Inter-Bold.ttf), copyright the Inter Project Authors
+
+Both are licensed under the SIL Open Font License, Version 1.1:
+https://openfontlicense.org
+
+Files: Latin subsets from Fontsource (https://fontsource.org), originally from Google Fonts.
