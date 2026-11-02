@@ -121,6 +121,29 @@ export async function askAi({ question, senderName = '', history = [], knowledge
   return { type: 'reply', text }
 }
 
+// Listens to a WhatsApp voice note and writes down what was said.
+// Returns the words, or '' when nothing clear was said.
+export async function transcribeVoice(audio, mimeType = 'audio/ogg') {
+  const text = await callGemini({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType: mimeType.split(';')[0], data: audio.toString('base64') } },
+          {
+            text:
+              'This is a WhatsApp voice note from a Nigerian university student. Write down exactly what they said, ' +
+              'in the language they used (English, Pidgin, Igbo, etc.). Write course codes like "GST 101". ' +
+              'Reply with only the words spoken, no notes or labels. If nothing clear is said, reply with exactly: NONE',
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0, maxOutputTokens: 600 },
+  })
+  return /^\s*NONE\s*\.?\s*$/i.test(text) ? '' : text.slice(0, 1500)
+}
+
 // Looks at a sticker (as PNG) and says what it's for.
 // Returns { mood, emoji, description }.
 export async function describeSticker(png) {

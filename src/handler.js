@@ -200,6 +200,13 @@ function aiAllowed() {
   return aiCount < config.dailyAiLimit
 }
 
+// Listening to a voice note is an AI call too, so it counts toward today's limit.
+export function takeAiCall() {
+  if (!config.geminiApiKey || !aiAllowed()) return false
+  aiCount += 1
+  return true
+}
+
 function stripMentions(text) {
   return text.replace(/@\S+/g, ' ').replace(BOT_NAME, ' ').replace(/\s+/g, ' ').trim()
 }

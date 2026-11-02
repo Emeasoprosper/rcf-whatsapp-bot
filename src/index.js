@@ -5,7 +5,8 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { config } from './config.js'
-import { handleMessage, handlePrivateMessage, maybeChimeIn, REACT_MARKER } from './handler.js'
+import { handleMessage, handlePrivateMessage, maybeChimeIn, REACT_MARKER, takeAiCall } from './handler.js'
+import { transcribeVoice } from './ai.js'
 import { remember, recentChat } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
@@ -50,8 +51,35 @@ function readContext(msg) {
     msg.videoMessage?.contextInfo ||
     msg.documentMessage?.contextInfo ||
     msg.stickerMessage?.contextInfo ||
+    msg.audioMessage?.contextInfo ||
     {}
   )
+}
+
+const MAX_VOICE_SECONDS = 180
+
+// A voice note turned into text, so it's handled like a typed message.
+// Returns '' when it isn't a voice note, is too long, or couldn't be heard.
+async function voiceText(sock, m, msg, jid) {
+  const audio = msg.audioMessage
+  if (!audio) return ''
+  if ((audio.seconds || 0) > MAX_VOICE_SECONDS) {
+    await sock.sendMessage(jid, { text: 'That voice note is a bit long for me 😅 Can you send a shorter one (under 3 minutes) or type it?' }, { quoted: m }).catch(() => {})
+    return ''
+  }
+  if (!takeAiCall()) return ''
+  try {
+    sock.sendPresenceUpdate('composing', jid).catch(() => {})
+    const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
+    const text = await transcribeVoice(buffer, audio.mimetype || 'audio/ogg')
+    if (text) console.log(`[voice] Heard ${audio.seconds || '?'}s voice note: "${text.slice(0, 80)}"`)
+    else await sock.sendMessage(jid, { text: "I couldn't catch that voice note 🎧 Can you say it again or type it?" }, { quoted: m }).catch(() => {})
+    return text
+  } catch (err) {
+    console.error('Voice note transcription failed:', err.message)
+    await sock.sendMessage(jid, { text: 'Network dey do me small, I no fit play that voice note 😅 Try again in a minute or type it?' }, { quoted: m }).catch(() => {})
+    return ''
+  }
 }
 
 // One-to-one chat (phone number or WhatsApp's newer @lid ids). Status
@@ -115,17 +143,19 @@ async function onPrivateMessage(sock, m, jid) {
     return
   }
 
-  const text = readText(msg)
+  const isVoice = Boolean(msg.audioMessage)
+  if (isVoice) sock.readMessages([m.key]).catch(() => {})
+  const text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
   if (!text) return
 
-  if (isStickerTeacher(m, jid)) {
+  if (!isVoice && isStickerTeacher(m, jid)) {
     const answer = await stickerCommand(text)
     if (answer) return void sock.sendMessage(jid, { text: answer })
   }
 
   const senderName = m.pushName || ''
   const history = recentChat(jid)
-  remember(jid, { name: senderName, text })
+  remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
 
   if (isThanksOnly(text)) {
     // Now and then a "thank you" sticker instead of the heart.
@@ -190,7 +220,12 @@ async function onMessage(sock, m) {
     }
   }
 
-  const text = readText(msg)
+  // Voice notes can't @mention anyone, so in groups the bot only listens to
+  // ones sent as a reply to its own message.
+  const voiceCtx = msg.audioMessage ? readContext(msg) : null
+  const voiceToBot = !fromMe && voiceCtx?.quotedMessage && botIds(sock).includes(bareId(voiceCtx.participant))
+  const isVoice = Boolean(voiceToBot)
+  const text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
   if (!text) {
     // Someone answered Bro Paul with a sticker, GIF or picture: laugh along
     // like a person would (a 😂 reaction, or now and then a funny sticker back).
@@ -218,7 +253,7 @@ async function onMessage(sock, m) {
 
   // History is taken before this message is added, so the AI sees it once.
   const history = recentChat(jid)
-  if (!fromMe) remember(jid, { name: senderName, text })
+  if (!fromMe) remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
 
   if (!fromMe && (mentionedBot || repliedToBot) && isThanksOnly(text)) {
     // "thanks Bro Paul" gets a heart (or now and then a thank-you sticker), not a speech.
