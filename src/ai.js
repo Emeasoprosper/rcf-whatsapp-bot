@@ -44,7 +44,23 @@ Stickers: you have a sticker pack. Only now and then (roughly one reply in six),
 // Strip angle brackets so a member can't fake the closing tags below.
 const clean = (s, max) => String(s || '').replace(/[<>]/g, ' ').slice(0, max)
 
+// Busy (429), server hiccups (5xx), timeouts and empty answers usually clear
+// in a second or two, so try up to 3 times before giving up.
+const RETRY_DELAYS_MS = [1200, 3500]
+const retryable = (err) => /\((429|500|502|503|504)\)|no content|aborted|timeout|fetch failed|network/i.test(err?.message || '')
+
 async function callGemini(body) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callGeminiOnce(body)
+    } catch (err) {
+      if (attempt >= RETRY_DELAYS_MS.length || !retryable(err)) throw err
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]))
+    }
+  }
+}
+
+async function callGeminiOnce(body) {
   if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY not configured')
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent`

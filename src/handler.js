@@ -294,8 +294,34 @@ async function resourceReply(text, senderId = '') {
   }
 }
 
+// When the AI can't answer (busy after retries, or today's limit is used up),
+// answer like a person instead of with an error message: casual one-liners
+// ("better for you 😮‍💨", "lol", "ok o") just get an emoji reaction, real
+// questions get a short, natural "give me a minute".
+const BUSY_LINES = [
+  'Network dey do me small 😅 Ask me again in a minute?',
+  'Ah, my brain dey load small 🔄 Give me one minute, then ask me again.',
+  'Hold on small, my connection dey shake 😅 Try me again shortly.',
+  'Omo, I lost my train of thought there 😂 Say am again for me in a bit?',
+]
+const TIRED_LINES = [
+  "I don talk tire for today 😅 Make we continue tomorrow. Meanwhile, the library is open: ",
+  "My voice don finish for today 😂 Catch me tomorrow! You fit still search the library: ",
+]
+const pickLine = (lines) => lines[Math.floor(Math.random() * lines.length)]
+// index.js reads this marker and reacts to the message instead of replying.
+export const REACT_MARKER = /^\[\[react:(.{1,8})\]\]$/u
+const reactWith = (emoji) => `[[react:${emoji}]]`
+
+function humanFallback(text, { tired = false } = {}) {
+  const t = stripMentions(text)
+  const casual = t.length <= 50 && !/\?/.test(t) && !looksLikeResourceRequest(t)
+  if (casual) return reactWith(/😂|🤣|😆|😅|lol|lmao|haha/i.test(t) ? '😂' : /🙏|thank|amen/i.test(t) ? '🙏' : '🤍')
+  return tired ? `${pickLine(TIRED_LINES)}${config.siteUrl}` : pickLine(BUSY_LINES)
+}
+
 async function aiReply(text, { senderName, senderId = '', history, isPrivate = false }) {
-  if (!aiAllowed()) return "I've reached my answer limit for today. Please try again tomorrow or ask an admin."
+  if (!aiAllowed()) return humanFallback(text, { tired: true })
   aiCount += 1
   try {
     const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate })
@@ -305,8 +331,8 @@ async function aiReply(text, { senderName, senderId = '', history, isPrivate = f
     if (result.type === 'contact') return businessReply()
     return result.text
   } catch (err) {
-    console.error('AI reply failed:', err.message)
-    return "I couldn't answer that right now. Please try again shortly."
+    console.error('AI reply failed after retries:', err.message)
+    return humanFallback(text)
   }
 }
 

@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { config } from './config.js'
-import { handleMessage, handlePrivateMessage, maybeChimeIn } from './handler.js'
+import { handleMessage, handlePrivateMessage, maybeChimeIn, REACT_MARKER } from './handler.js'
 import { remember, recentChat } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
@@ -49,6 +49,7 @@ function readContext(msg) {
     msg.imageMessage?.contextInfo ||
     msg.videoMessage?.contextInfo ||
     msg.documentMessage?.contextInfo ||
+    msg.stickerMessage?.contextInfo ||
     {}
   )
 }
@@ -108,7 +109,9 @@ async function onPrivateMessage(sock, m, jid) {
   // Stickers sent to the bot: the owner is teaching the pack. Others are ignored.
   if (msg.stickerMessage) {
     if (isStickerTeacher(m, jid)) return learnFromOwner(sock, m, jid)
-    console.log(`[stickers] Sticker from ${bareId(jid)} ignored. To let this number teach stickers, add it to STICKER_TEACHERS.`)
+    // Not a teacher: laugh along instead of ignoring it.
+    console.log(`[stickers] Sticker from ${bareId(jid)} not learned (only teachers can add stickers; see STICKER_TEACHERS).`)
+    await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
     return
   }
 
@@ -137,6 +140,10 @@ async function onPrivateMessage(sock, m, jid) {
   const raw = await handlePrivateMessage({ id: m.key.id, senderId: jid, senderName, text, history })
   sock.sendPresenceUpdate('paused', jid).catch(() => {})
   if (!raw) return
+
+  // The AI couldn't answer a casual message: react like a person instead.
+  const reaction = REACT_MARKER.exec(raw)
+  if (reaction) return void sock.sendMessage(jid, { react: { text: reaction[1], key: m.key } }).catch(() => {})
 
   const { text: reply, sticker } = splitStickerTag(raw)
   if (reply) {
@@ -185,6 +192,17 @@ async function onMessage(sock, m) {
 
   const text = readText(msg)
   if (!text) {
+    // Someone answered Bro Paul with a sticker, GIF or picture: laugh along
+    // like a person would (a 😂 reaction, or now and then a funny sticker back).
+    const visual = msg.stickerMessage || msg.imageMessage || msg.videoMessage
+    const visualCtx = readContext(msg)
+    const toBot = visual && visualCtx.quotedMessage && botIds(sock).includes(bareId(visualCtx.participant))
+    if (!fromMe && toBot) {
+      if (!(await maybeSendSticker(sock, jid, 'funny', { chance: 0.4 }))) {
+        await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
+      }
+      return
+    }
     // A shared file with no caption: probably materials, worth a heart.
     if (!fromMe && hasDocument && shouldReact(jid, { text: '', hasDocument })) await react()
     return
@@ -239,6 +257,14 @@ async function onMessage(sock, m) {
     repliedToBot,
     history,
   })
+
+  if (raw && REACT_MARKER.test(raw)) {
+    // The AI couldn't answer a casual message: react like a person instead.
+    const emoji = REACT_MARKER.exec(raw)[1]
+    await sock.sendMessage(jid, { react: { text: emoji, key: m.key } }).catch(() => {})
+    logActivity('react', jid, `${emoji} on ${senderName || 'a member'}'s message`)
+    return
+  }
 
   if (raw) {
     // The AI may end its reply with [sticker: mood]: text first, then the sticker.
