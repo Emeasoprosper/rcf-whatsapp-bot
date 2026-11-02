@@ -391,6 +391,8 @@ async function start() {
     if (connection === 'open') {
       fs.rmSync(QR_FILE, { force: true })
       currentSock = sock
+      // For the "DM me" link when business comes up in a group.
+      config.botPhone = bareId(sock.user?.id)
       console.log(`Connected as ${sock.user?.id} (login saved in ${auth.where}). ${config.botName} is online.`)
       setStatus('online', { phone: bareId(sock.user?.id) })
       startPoster(() => currentSock)

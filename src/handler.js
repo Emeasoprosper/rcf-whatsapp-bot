@@ -40,7 +40,8 @@ const WHO_MADE = new RegExp(
   [
     `who\\s+(\\w+\\s+){0,2}${MADE}\\s+${YOU}`, // who (really / actually) designed you
     `who\\s+(is|dey|be)\\s+(really\\s+)?behind\\s+${YOU}`,
-    `(your|ur|the)\\s+${MAKER}`, // who is your creator, the developer
+    `(your|ur)\\s+${MAKER}`, // who is your creator
+    `the\\s+${MAKER}\\s+of\\s+${YOU}`, // the developer of this bot (not "the owner of the hostel")
     `who\\s+(is|be)\\s+(your|ur)\\s+(boss|oga)`,
     `(were|was)\\s+you\\s+(\\w+\\s+)?${MADE}`, // were you made by...
     `names?\\s+(of\\s+)?(your|ur|the)\\s+${MAKER}`,
@@ -153,10 +154,23 @@ function isBusinessEnquiry(text) {
 
 function businessReply() {
   return (
-    `Happy to connect you! 🤝\n\nFor partnerships, adverts, sponsorship, projects or any business with the RCF MOUAU Library, please contact the developer directly:\n\n` +
-    `*${config.creatorName}* — ${config.creatorSkills}\n📞 ${config.creatorPhone}\n💬 ${waLink()}\n\n` +
-    `Send a short message saying who you are and what you have in mind.`
+    `Perfect, let's make it happen 🤝\n\nHere's the direct line to *${config.creatorName}* (${config.creatorSkills}) to agree the details:\n\n` +
+    `📞 ${config.creatorPhone}\n💬 ${waLink()}\n\n` +
+    `Send a short hello with what we discussed, and ${firstName()} will take it from there.`
   )
+}
+
+// Business never gets discussed in front of the whole group: invite them to
+// the bot's DM, where the AI talks it through properly.
+const DM_INVITES = [
+  (link) => `Love that 🤝 Let's talk business properly in my DM so we can get into the details${link ? `: ${link}` : ' 😊'}`,
+  (link) => `This one deserves a proper conversation 😄 Send me a DM and let's discuss${link ? ` 👉 ${link}` : ' 💼'}`,
+  (link) => `Good one! Business talk is better in private 😉 DM me and tell me what you have in mind${link ? `: ${link}` : ''}`,
+]
+
+function dmInviteReply() {
+  const link = config.botPhone ? `https://wa.me/${config.botPhone}` : ''
+  return pickLine(DM_INVITES)(link)
 }
 
 const INTRO_WORDS = /\b(introduc(e|ing)|meet|welcome|who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)|new\s+(library\s+)?(dept|department)\s+member)\b/i
@@ -334,8 +348,9 @@ async function aiReply(text, { senderName, senderId = '', history, isPrivate = f
     const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate })
     // The AI decided the member is asking for a material: look it up for real.
     if (result.type === 'search') return await resourceReply(result.query, senderId)
-    // The AI recognised a business enquiry or a request for the owner's contact.
-    if (result.type === 'contact') return businessReply()
+    // Business or a request for the owner: the direct contact in DM (the AI
+    // has talked it through first), an invite to the DM in a group.
+    if (result.type === 'contact') return isPrivate ? businessReply() : dmInviteReply()
     return result.text
   } catch (err) {
     console.error('AI reply failed after retries:', err.message)
@@ -395,7 +410,8 @@ export async function handlePrivateMessage(msg) {
   const text = msg.text.trim()
   if (!text) return null
 
-  if (isBusinessEnquiry(text)) return businessReply()
+  // Business enquiries go to the AI below, which talks them through and
+  // hands over the contact when it's time.
   if (acceptedContactOffer(msg.senderId, text)) return contactReply()
   const aboutCreator = await creatorAnswer(text, msg.senderId, { senderName: msg.senderName, history: msg.history || [], isPrivate: true })
   if (aboutCreator) return aboutCreator.slice(0, 1800)
@@ -479,7 +495,7 @@ export async function handleMessage(msg) {
       : null
   const reply =
     tagged && isBusinessEnquiry(text)
-      ? businessReply()
+      ? dmInviteReply()
       : aboutCreator
         ? aboutCreator
         : isRequest
