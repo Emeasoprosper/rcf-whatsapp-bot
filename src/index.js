@@ -267,7 +267,7 @@ async function onMessage(sock, m) {
   const senderName = m.pushName || ''
   const senderId = m.key.participant || jid
   // "@Bro Paul" as a reply to someone's voice note: listen to it and answer.
-  if (!fromMe && !isVoice && mentionedBot) text = await withQuotedVoice(sock, m, jid, text, ctx)
+  if (!fromMe && !isVoice && (mentionedBot || /^\W*bro\s*paul\b/i.test(text))) text = await withQuotedVoice(sock, m, jid, text, ctx)
 
   // History is taken before this message is added, so the AI sees it once.
   const history = recentChat(jid)
