@@ -23,6 +23,7 @@ function apply(settings = {}) {
   set('reactions', settings.reactions)
   set('privateChats', settings.privateChats)
   set('morningPost', settings.morningPost)
+  set('featuredPost', settings.featuredPost)
   set('stickers', settings.stickers)
   set('promoEveryHours', settings.promoEveryHours)
   set('activeFromHour', settings.activeFromHour)

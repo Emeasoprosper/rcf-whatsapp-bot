@@ -218,6 +218,43 @@ ${selfAware ? `- Include ONE light, honest, self-aware line about being the libr
   return text.slice(0, 900)
 }
 
+// The caption for the daily "book of the day" post. The title line and the
+// link are added by the caller, so this is only the selling words.
+export async function askFeaturedCaption({ title, author, description, typeLabel, categories = [] }) {
+  const text = await callGemini({
+    systemInstruction: {
+      parts: [
+        {
+          text: `${SYSTEM_RULES}
+
+Special task: write ${config.botName}'s daily "book of the day" post for the group, recommending ONE resource from the RCF digital library. The cover image is shown above your words, so make people stop scrolling and want to open it.
+- Line 1: a short, punchy hook in *bold* that sparks curiosity or speaks to something students feel (exam pressure, purpose, money, relationships with God, discipline, the future). Questions and bold promises work well. It must make sense instantly on first read: clear and relatable beats clever. No "Book of the day" here, that is added already.
+- Then 2 or 3 short sentences on what the reader gets from it, in a warm, excited friend's voice, as if you just read it and can't keep quiet. Focus on the benefit to them, not a summary.
+- Use only what <resource> says. If the description is empty, sell it from the title and type without inventing plot, chapters, quotes or claims about the author.
+- End with one short line nudging them to open it today.
+- 45 to 80 words, 2 to 4 emojis, no hashtags, no links, no title line (it's added after your words).
+- Reply with only the post.`,
+        },
+      ],
+    },
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text:
+              `<resource>\nTitle: ${clean(title, 150)}\nAuthor: ${clean(author, 80) || 'unknown'}\n` +
+              `Type: ${clean(typeLabel, 40) || 'book'}\nCategories: ${clean(categories.join(', '), 120) || 'none'}\n` +
+              `Description: ${clean(description, 700) || '(none)'}\n</resource>`,
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0.95, maxOutputTokens: 500 },
+  })
+  return text.slice(0, 900)
+}
+
 const CHIME_RULES = `${SYSTEM_RULES}
 
 Special task: nobody tagged you. The group in <recent_chat> is having a lively discussion. Decide whether ${config.botName} should jump in with ONE short message, the way a sensible friend would.

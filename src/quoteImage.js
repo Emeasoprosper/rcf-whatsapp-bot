@@ -50,6 +50,48 @@ async function logo(ring) {
   }
 }
 
+// "Book of the day": the real cover, big and centred with a soft shadow, on
+// a blurred, darkened copy of itself, with a label on top and the handle at
+// the bottom. cover = the cover image buffer. Returns a JPEG buffer.
+export async function coverCard({ cover, label = 'Book of the day' }) {
+  const background = await sharp(cover)
+    .resize(SIZE, SIZE, { fit: 'cover' })
+    .blur(45)
+    .modulate({ brightness: 0.42, saturation: 1.3 })
+    .toBuffer()
+
+  // Scans often have white strips round the cover: trim them, then fit the
+  // cover inside 640 x 760, keeping its shape.
+  const trimmed = await sharp(cover).trim({ threshold: 30 }).toBuffer().catch(() => cover)
+  const front = await sharp(trimmed).resize(640, 760, { fit: 'inside' }).toBuffer()
+  const { width: w, height: h } = await sharp(front).metadata()
+  const radius = 18
+  const mask = Buffer.from(`<svg width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="${radius}" ry="${radius}"/></svg>`)
+  const rounded = await sharp(front).composite([{ input: mask, blend: 'dest-in' }]).png().toBuffer()
+
+  const top = 150 + Math.round((760 - h) / 2)
+  const left = Math.round((SIZE - w) / 2)
+  const pad = 70
+  const shadow = Buffer.from(
+    `<svg width="${w + pad * 2}" height="${h + pad * 2}" xmlns="http://www.w3.org/2000/svg">
+      <filter id="s"><feGaussianBlur stdDeviation="26"/></filter>
+      <rect x="${pad}" y="${pad + 22}" width="${w}" height="${h}" rx="${radius}" fill="#000" fill-opacity="0.7" filter="url(#s)"/>
+    </svg>`
+  )
+
+  const layers = [
+    { input: shadow, left: left - pad, top: top - pad },
+    { input: rounded, left, top },
+  ]
+  const center = (img, y) => layers.push({ input: img.buf, left: Math.round((SIZE - img.w) / 2), top: Math.round(y) })
+  const labelImg = await text(label.toUpperCase(),{ face: SANS_BOLD, size: 34, color: '#ffffff', width: 1000, spacing: 6 })
+  center(labelImg, 74 - labelImg.h / 2 + 10)
+  const footer = await text(`${HANDLE}  ·  ${config.siteUrl.replace(/^https?:\/\//, '')}`, { face: SANS, size: 24, color: '#ffffffb3', width: 1000 })
+  center(footer, SIZE - 52 - footer.h / 2)
+
+  return sharp(background).composite(layers).jpeg({ quality: 88 }).toBuffer()
+}
+
 // kind: 'verse' | 'tip'. Returns a PNG buffer.
 export async function quoteCard({ kind, label, quote, by }) {
   const t = THEMES[kind] || THEMES.verse

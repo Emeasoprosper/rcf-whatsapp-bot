@@ -45,6 +45,10 @@ export const config = {
   stickerTeachers: (process.env.STICKER_TEACHERS || '').split(',').map((s) => s.replace(/\D/g, '')).filter(Boolean),
   // Verse of the day + study tip in every group each morning from 7am.
   morningPost: process.env.MORNING_POST !== 'false',
+  // "Book of the day": one library resource with its cover, posted in every
+  // group once a day from this Lagos hour (until activeToHour).
+  featuredPost: process.env.FEATURED_POST !== 'false',
+  featuredHour: num(process.env.FEATURED_HOUR, 18),
   reactions: true,
   // Join a lively discussion without being tagged, when the AI thinks it can
   // genuinely help. At most once per cooldown per group.

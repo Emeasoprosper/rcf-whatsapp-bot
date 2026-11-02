@@ -60,8 +60,10 @@ const MAX_VOICE_SECONDS = 180
 
 // A voice note turned into text, so it's handled like a typed message.
 // Returns '' when it isn't a voice note, is too long, or couldn't be heard.
-async function voiceText(sock, m, msg, jid) {
-  const audio = msg.audioMessage
+// source = the message holding the audio when it isn't m itself (a voice
+// note m replies to); replies about it still quote m.
+async function voiceText(sock, m, msg, jid, source = m) {
+  const audio = msg?.audioMessage
   if (!audio) return ''
   if ((audio.seconds || 0) > MAX_VOICE_SECONDS) {
     await sock.sendMessage(jid, { text: 'That voice note is a bit long for me 😅 Can you send a shorter one (under 3 minutes) or type it?' }, { quoted: m }).catch(() => {})
@@ -70,7 +72,7 @@ async function voiceText(sock, m, msg, jid) {
   if (!takeAiCall()) return ''
   try {
     sock.sendPresenceUpdate('composing', jid).catch(() => {})
-    const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
+    const buffer = await downloadMediaMessage(source, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
     const text = await transcribeVoice(buffer, audio.mimetype || 'audio/ogg')
     if (text) console.log(`[voice] Heard ${audio.seconds || '?'}s voice note: "${text.slice(0, 80)}"`)
     else await sock.sendMessage(jid, { text: "I couldn't catch that voice note 🎧 Can you say it again or type it?" }, { quoted: m }).catch(() => {})
@@ -80,6 +82,19 @@ async function voiceText(sock, m, msg, jid) {
     await sock.sendMessage(jid, { text: 'Network dey do me small, I no fit play that voice note 😅 Try again in a minute or type it?' }, { quoted: m }).catch(() => {})
     return ''
   }
+}
+
+// A typed message replying to a voice note ("Bro Paul, answer this"): listen
+// to that voice note too, even one sent before the bot could hear them.
+// A bare tag becomes just the voice note; anything longer keeps both.
+async function withQuotedVoice(sock, m, jid, text, ctx) {
+  const quoted = unwrap(ctx.quotedMessage)
+  if (!quoted?.audioMessage) return text
+  const source = { key: { remoteJid: jid, id: ctx.stanzaId, participant: ctx.participant }, message: ctx.quotedMessage }
+  const heard = await voiceText(sock, m, quoted, jid, source)
+  if (!heard) return text
+  const typed = text.replace(/@\S+/g, ' ').replace(/\bbro\s*paul\b/i, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  return typed.length < 15 ? heard : `${text}\n(The voice note they replied to says: "${heard}")`
 }
 
 // One-to-one chat (phone number or WhatsApp's newer @lid ids). Status
@@ -145,8 +160,9 @@ async function onPrivateMessage(sock, m, jid) {
 
   const isVoice = Boolean(msg.audioMessage)
   if (isVoice) sock.readMessages([m.key]).catch(() => {})
-  const text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
+  let text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
   if (!text) return
+  if (!isVoice) text = await withQuotedVoice(sock, m, jid, text, readContext(msg))
 
   if (!isVoice && isStickerTeacher(m, jid)) {
     const answer = await stickerCommand(text)
@@ -225,7 +241,7 @@ async function onMessage(sock, m) {
   const voiceCtx = msg.audioMessage ? readContext(msg) : null
   const voiceToBot = !fromMe && voiceCtx?.quotedMessage && botIds(sock).includes(bareId(voiceCtx.participant))
   const isVoice = Boolean(voiceToBot)
-  const text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
+  let text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
   if (!text) {
     // Someone answered Bro Paul with a sticker, GIF or picture: laugh along
     // like a person would (a 😂 reaction, or now and then a funny sticker back).
@@ -250,6 +266,8 @@ async function onMessage(sock, m) {
   const repliedToBot = Boolean(ctx.quotedMessage) && ids.includes(bareId(ctx.participant))
   const senderName = m.pushName || ''
   const senderId = m.key.participant || jid
+  // "@Bro Paul" as a reply to someone's voice note: listen to it and answer.
+  if (!fromMe && !isVoice && mentionedBot) text = await withQuotedVoice(sock, m, jid, text, ctx)
 
   // History is taken before this message is added, so the AI sees it once.
   const history = recentChat(jid)

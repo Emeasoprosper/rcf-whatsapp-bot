@@ -5,9 +5,10 @@ import { getState, setState } from './state.js'
 import { remember, lastHumanMessageAt } from './chatMemory.js'
 import { botApi } from './backend.js'
 import { allowedGroups, isAllowedGroup } from './groups.js'
-import { askNewMonthWish } from './ai.js'
+import { askNewMonthWish, askFeaturedCaption } from './ai.js'
 import { logActivity } from './activity.js'
-import { quoteCard, HANDLE } from './quoteImage.js'
+import { quoteCard, coverCard, HANDLE } from './quoteImage.js'
+import { featuredCandidates } from './library.js'
 import { maybeSendSticker } from './stickers.js'
 
 // Things the bot posts on its own: admin announcements (ticked "post to
@@ -291,6 +292,112 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
   }
 }
 
+// ---------- Book of the day ----------
+
+// Books featured lately, so the same one doesn't come back for a long while.
+const FEATURED_MEMORY = 60
+
+const FEATURED_FALLBACKS = [
+  (r) => `*This one could change how you see your whole semester* 👀\n\nI've been telling people about it all week. Short, practical and straight to the point, the kind of read you finish and immediately want to share 🔥\n\nOpen it today, thank me later 😄`,
+  (r) => `*Looking for something worth your screen time tonight?* 📱\n\nSkip the endless scrolling for 20 minutes and give this a try. ${r.author ? `${r.author} has a way of saying things that just stick.` : 'It says things that just stick.'} 🙌\n\nIt's free on our library, go and see 👇`,
+  (r) => `*Your future self will thank you for reading this* 🙏\n\nOne good book at the right time can reset your focus, your faith and your plans. This might be that book for you ✨\n\nTap the link and start the first page today.`,
+]
+
+async function fetchCover(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(45000) })
+  if (!res.ok) throw new Error(`cover returned ${res.status}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  if (buf.length < 2000) throw new Error('cover is too small')
+  return buf
+}
+
+// Picks today's resource (one of the best few not featured lately, so it
+// isn't always the same top book) and makes its picture and words.
+async function prepareFeatured() {
+  const history = getState('featuredHistory', [])
+  const all = await featuredCandidates()
+  const fresh = all.filter((r) => !history.includes(r.id))
+  const pool = (fresh.length ? fresh : all).slice(0, 8)
+  if (pool.length === 0) return null
+  // Shuffle the best few, then take the first one whose cover downloads.
+  pool.sort(() => Math.random() - 0.5)
+
+  for (const resource of pool.slice(0, 4)) {
+    let cover
+    try {
+      cover = await fetchCover(resource.coverUrl)
+    } catch (err) {
+      console.error(`[featured] Cover for "${resource.title}" failed:`, err.message)
+      continue
+    }
+    let image = cover
+    try {
+      image = await coverCard({ cover })
+    } catch (err) {
+      console.error('[featured] Could not draw the card, sending the plain cover:', err.message)
+    }
+    let words
+    try {
+      words = await askFeaturedCaption(resource)
+    } catch (err) {
+      console.error('[featured] AI caption failed, using a ready one:', err.message)
+      words = FEATURED_FALLBACKS[Math.floor(Math.random() * FEATURED_FALLBACKS.length)](resource)
+    }
+    const caption = [
+      '📚 *BOOK OF THE DAY*',
+      '',
+      words,
+      '',
+      `📖 *${resource.title}*${resource.author ? ` by ${resource.author}` : ''}`,
+      `👉 Read it free: ${resource.url}`,
+    ].join('\n')
+    return { resource, image, caption }
+  }
+  return null
+}
+
+// test = FORCE_FEATURED=1 at startup: post right now, only to the groups in
+// ALLOWED_GROUP_JID (your test group), and don't count it.
+async function maybeFeaturedPost(getSock, { test = false } = {}) {
+  const sock = getSock()
+  if (!sock) return
+  if (!test && !config.featuredPost) return
+  const { year, monthName, day, hour } = lagosToday()
+  if (!test && (hour < config.featuredHour || !isActiveHours())) return
+
+  const key = `${year}-${monthName}-${day}`
+  const done = getState('featuredPosted', {})
+  const due = test ? config.allowedGroups : allowedGroups().filter((jid) => done[jid] !== key)
+  if (due.length === 0) {
+    if (test) console.log('[featured] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
+    return
+  }
+
+  const post = await prepareFeatured()
+  if (!post) {
+    console.log('[featured] No resource with a cover found yet, will try again shortly.')
+    return
+  }
+
+  for (const jid of due) {
+    try {
+      await send(sock, jid, { image: post.image, caption: post.caption }, post.caption)
+      if (!test) {
+        done[jid] = key
+        setState('featuredPosted', done)
+      }
+      console.log(`[featured] ${test ? 'TEST: ' : ''}Posted "${post.resource.title}" in ${jid}`)
+      logActivity('featured', jid, `Book of the day: ${post.resource.title}`)
+    } catch (err) {
+      console.error('Book of the day post failed:', err.message)
+    }
+  }
+  if (!test) {
+    const history = getState('featuredHistory', [])
+    setState('featuredHistory', [post.resource.id, ...history.filter((id) => id !== post.resource.id)].slice(0, FEATURED_MEMORY))
+  }
+}
+
 // ---------- Welcome new members ----------
 
 const pendingWelcomes = new Map()
@@ -383,6 +490,12 @@ export function startPoster(getSock) {
   if (process.env.FORCE_MORNING) {
     console.log('[morning] Test mode: posting the morning verse to your test group in 20 seconds...')
     setTimeout(() => maybeMorningPost(getSock, { test: true }).catch((err) => console.error('Morning test failed:', err.message)), 20 * 1000)
+  }
+
+  setInterval(() => maybeFeaturedPost(getSock).catch((err) => console.error('Book of the day check failed:', err.message)), PROMO_CHECK_MS)
+  if (process.env.FORCE_FEATURED) {
+    console.log('[featured] Test mode: posting a book of the day to your test group in 25 seconds...')
+    setTimeout(() => maybeFeaturedPost(getSock, { test: true }).catch((err) => console.error('Book of the day test failed:', err.message)), 25 * 1000)
   }
 
   if (process.env.FORCE_NEW_MONTH) {
