@@ -17,6 +17,10 @@ export function isThanksOnly(text) {
   return text.length <= 60 && THANKS_ONLY.test(text.trim())
 }
 
+export function isGoodNews(text) {
+  return GOOD_NEWS.test(text)
+}
+
 export function isBirthdayWish(text) {
   return BIRTHDAY.test(text)
 }

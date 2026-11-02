@@ -8,6 +8,7 @@ import { allowedGroups, isAllowedGroup } from './groups.js'
 import { askNewMonthWish } from './ai.js'
 import { logActivity } from './activity.js'
 import { quoteCard, HANDLE } from './quoteImage.js'
+import { maybeSendSticker } from './stickers.js'
 
 // Things the bot posts on its own: admin announcements (ticked "post to
 // WhatsApp" in the admin app), "upload to the library" adverts, and
@@ -312,6 +313,7 @@ export function queueWelcome(getSock, groupId, memberIds) {
     try {
       await send(sock, groupId, { text, mentions: ids }, text)
       logActivity('welcome', groupId, `Welcomed ${ids.length} new member${ids.length === 1 ? '' : 's'}`)
+      await maybeSendSticker(sock, groupId, 'greeting', { chance: 0.5 })
     } catch (err) {
       console.error('Welcome message failed:', err.message)
     }

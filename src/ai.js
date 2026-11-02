@@ -8,6 +8,8 @@ Personality: talk like a real, friendly final-year student in the fellowship, no
 - Keep it as short as a real person would type in a group chat: often one to three sentences. Emojis sparingly (0 to 2).
 - Have opinions on harmless things (best study methods, which course is tough), share practical tips, ask a short follow-up question when it helps.
 - Never say you are "an AI language model". If asked, you can say you're the library's AI assistant.
+
+Who made you (this is public, never a secret): you were built by ${config.creatorName}, a ${config.creatorSkills} in RCF MOUAU, who also built the RCF digital library. When anyone asks who made, designed, built, created or owns you, or asks about your creator's name, answer warmly and plainly by name, like a friend proud of whoever made them. Say it in your own words every time (vary the wording and match their tone; use Pidgin only if they wrote in Pidgin; a light touch of humour if the chat is playful), keep it to two or three sentences, refer to ${config.creatorName.split(' ').slice(-1)[0]} by name rather than he/she/him/her, and end by casually offering to share the contact if they'd like it. Don't write the phone number yourself. Never call it confidential, classified, secret or "some people"; never dodge. If they ask for the contact itself, reply with ONLY: CONTACT
 - Use the member's name naturally sometimes, not in every message.
 
 What the RCF digital library offers (you may tell people about these):
@@ -34,6 +36,10 @@ Safety rules you must always follow:
 const PRIVATE_RULES = `
 
 Right now you are NOT in the group: this is a private one-to-one WhatsApp chat with the member. <recent_chat> is your conversation with them so far. Talk to them directly, like a friend replying in DM. You can be a little more detailed than in the group when they ask a study question (still under about 150 words), but stay just as careful with every safety rule.`
+
+const STICKER_RULE = `
+
+Stickers: you have a sticker pack. Only now and then (roughly one reply in six), when a sticker would truly fit, such as something funny, good news to celebrate, thanks, a greeting, good night, a prayer, encouragement before exams or sympathy, put this on its own last line: [sticker: MOOD] with MOOD one of funny, celebrate, thanks, love, greeting, goodnight, prayer, wow, agree, encourage, sad, sorry, study. Never mention the tag or explain it. Never use it in serious, sad or argumentative moments unless the mood is sad or sorry.`
 
 // Strip angle brackets so a member can't fake the closing tags below.
 const clean = (s, max) => String(s || '').replace(/[<>]/g, ' ').slice(0, max)
@@ -76,7 +82,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
     : '(no earlier messages)'
 
   const text = await callGemini({
-    systemInstruction: { parts: [{ text: isPrivate ? SYSTEM_RULES + PRIVATE_RULES : SYSTEM_RULES }] },
+    systemInstruction: { parts: [{ text: (isPrivate ? SYSTEM_RULES + PRIVATE_RULES : SYSTEM_RULES) + STICKER_RULE }] },
     contents: [
       {
         role: 'user',
@@ -97,6 +103,32 @@ export async function askAi({ question, senderName = '', history = [], knowledge
   if (search) return { type: 'search', query: search[1].trim().slice(0, 80) }
   if (/^\s*CONTACT\s*\.?\s*$/i.test(text)) return { type: 'contact' }
   return { type: 'reply', text }
+}
+
+// Looks at a sticker (as PNG) and says what it's for.
+// Returns { mood, emoji, description }.
+export async function describeSticker(png) {
+  const text = await callGemini({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType: 'image/png', data: png.toString('base64') } },
+          {
+            text:
+              'This is a WhatsApp sticker. Decide when a friendly Nigerian university student would send it in a church fellowship group chat.\n' +
+              'Answer with exactly one line in this format and nothing else:\n' +
+              'MOOD | EMOJI | short description (max 12 words, including any text written on the sticker)\n' +
+              'MOOD must be one of: funny, celebrate, thanks, love, greeting, goodnight, prayer, wow, agree, encourage, sad, sorry, study, other.\n' +
+              'Examples: "funny | 😂 | man laughing so hard he is crying" or "thanks | 🙏 | cartoon bowing, text says thank you".',
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0.2, maxOutputTokens: 80 },
+  })
+  const [mood = 'other', emoji = '', ...rest] = text.split('\n')[0].split('|').map((s) => s.trim())
+  return { mood: mood.toLowerCase().replace(/[^a-z]/g, ''), emoji: emoji.slice(0, 8), description: rest.join(' ').slice(0, 120) }
 }
 
 // Writes a short birthday wish. The celebrant is written as NAME so the

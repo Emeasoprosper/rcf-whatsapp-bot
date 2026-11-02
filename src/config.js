@@ -38,6 +38,11 @@ export const config = {
   // app (WhatsApp Bot page > Settings), see liveSettings.js.
   birthdayWishes: true,
   newMonthWishes: true,
+  // Send stickers from the owner's pack at fitting moments (see stickers.js).
+  stickers: process.env.STICKERS !== 'false',
+  // Numbers allowed to teach stickers, besides CREATOR_PHONE (comma separated,
+  // any format; WhatsApp @lid ids work too).
+  stickerTeachers: (process.env.STICKER_TEACHERS || '').split(',').map((s) => s.replace(/\D/g, '')).filter(Boolean),
   // Verse of the day + study tip in every group each morning from 7am.
   morningPost: process.env.MORNING_POST !== 'false',
   reactions: true,

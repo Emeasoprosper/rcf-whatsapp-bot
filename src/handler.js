@@ -29,31 +29,114 @@ const STOPWORDS = new Set((
   'slide slides dear guys everyone good morning afternoon evening bot assistant hi hello hey thanks thank it its'
 ).split(' '))
 
-// "Who created you" and "contact of your dev", including common typos
-// (carted, creared), short forms (dev) and follow-ups ("his contact").
+// Questions about who made Bro Paul, and requests for that person's contact,
+// including typos (carted), short forms (dev), filler words ("who REALLY
+// designed you"), Pidgin ("who build you") and follow-ups ("his contact").
 const MAKER = '(creator|developer|dev|maker|owner|programmer|builder|designer)'
 const CONTACT = '(contact|contacts|number|phone|line|whatsapp|details?|info)'
-const CREATOR_QUESTION = new RegExp(
+const MADE = '(cr\\w*ted|cr\\w*ed|carted|create|made|make|built|build|buit|developed|develop|designed|design|owns?|programm?ed|program|coded|code|invented|trained)'
+const YOU = '(you|u|bro\\s*paul|this\\s+(bot|ai|app|assistant|thing)|the\\s+(bot|ai|assistant))'
+const WHO_MADE = new RegExp(
   [
-    `who\\s+(cr\\w*ted|cr\\w*ed|carted|made|built|buit|developed|designed|owns?|programm?ed|coded|invented)\\s+(you|u|bro\\s*paul|this\\s+(bot|ai|app|assistant|thing))`,
-    `who\\s+(is|dey)\\s+behind\\s+(you|u|bro\\s*paul|this\\s+(bot|ai|app|assistant|thing))`,
-    `(your|ur|the)\\s+${MAKER}`,
+    `who\\s+(\\w+\\s+){0,2}${MADE}\\s+${YOU}`, // who (really / actually) designed you
+    `who\\s+(is|dey|be)\\s+(really\\s+)?behind\\s+${YOU}`,
+    `(your|ur|the)\\s+${MAKER}`, // who is your creator, the developer
+    `who\\s+(is|be)\\s+(your|ur)\\s+(boss|oga)`,
+    `(were|was)\\s+you\\s+(\\w+\\s+)?${MADE}`, // were you made by...
+    `names?\\s+(of\\s+)?(your|ur|the)\\s+${MAKER}`,
+  ].join('|'),
+  'i'
+)
+const CONTACT_ASK = new RegExp(
+  [
     `${MAKER}'?s?\\s+${CONTACT}`,
     `${CONTACT}\\s+(of|for)\\s+(your|ur|the|this)\\s+${MAKER}`,
     `(his|her|their)\\s+${CONTACT}`,
     `contact\\s+(info|information|details?|number)`,
-    `how\\s+(can|do)\\s+i\\s+(contact|reach)\\s+(you|u|the\\s+${MAKER})`,
+    `how\\s+(can|do)\\s+i\\s+(contact|reach)\\s+(you|u|him|her|them|the\\s+${MAKER})`,
+    `(talk|speak|chat)\\s+(to|with)\\s+(the\\s+person|whoever|the\\s+one)\\s+who\\s+${MADE}`,
+    `(send|give|share|drop)\\s+(me\\s+)?(the\\s+|your\\s+|his\\s+|her\\s+|their\\s+)?(contact|number|whatsapp)`,
   ].join('|'),
   'i'
 )
+
+// After "who made you", the same person can just say "yes" / "send it" /
+// "send the contact" (no tag needed in groups) for the next 10 minutes.
+const CONTACT_OFFER_MS = 10 * 60 * 1000
+const contactOffered = new Map() // senderId -> time offered
+const ACCEPT_OFFER = /^\W*(yes|yeah|yea|yep|ok(ay)?|sure|please|pls|plz|abeg|send(\s+it)?|share(\s+it)?|i\s+(want|need)\s+it|go\s+ahead)\b/i
+
+function acceptedContactOffer(senderId, text) {
+  const at = contactOffered.get(senderId)
+  if (!at || Date.now() - at > CONTACT_OFFER_MS) return false
+  const t = stripMentions(text)
+  if (!(ACCEPT_OFFER.test(t) || CONTACT_ASK.test(t)) || t.length > 60) return false
+  contactOffered.delete(senderId)
+  return true
+}
 
 function waLink() {
   const digits = config.creatorPhone.replace(/\D/g, '')
   return `https://wa.me/${digits.startsWith('0') ? `234${digits.slice(1)}` : digits}`
 }
 
-function creatorReply() {
-  return `I'm *${config.botName}*, the RCF MOUAU Library Assistant 📚\n\nI was created by *${config.creatorName}* — ${config.creatorSkills}.\nFor contact or support, reach the developer on WhatsApp: ${config.creatorPhone}\n${waLink()}`
+const firstName = () => config.creatorName.split(' ').slice(-1)[0]
+
+// "Web Developer · Data Analyst · Video Editor" -> "web developer, data analyst and video editor"
+function skillsInWords() {
+  const parts = config.creatorSkills.split('·').map((s) => s.trim().toLowerCase()).filter(Boolean)
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0] || 'developer'
+}
+
+// Answers "who made you" like a person would, and offers the contact.
+const WHO_MADE_REPLIES = [
+  (n, f, s) => `Ah, no secret at all 😄 I was built by *${n}*, a ${s} here in RCF MOUAU. ${f} put me together so you can find books, notes and past questions faster.\n\nWant to reach ${f}? Just ask for the contact and I'll send it.`,
+  (n, f, s) => `That would be *${n}* 🙌 ${f} is a ${s} in the fellowship, and the brain behind me and the RCF digital library.\n\nIf you'd like to talk to ${f}, say "send the contact" and I'll share it.`,
+  (n, f, s) => `My creator is *${n}* 😊 ${f} is a ${s}, and built me to help everyone in RCF MOUAU study smarter.\n\nNeed ${f}'s contact? Just ask.`,
+]
+
+function whoMadeReply() {
+  const pick = WHO_MADE_REPLIES[Math.floor(Math.random() * WHO_MADE_REPLIES.length)]
+  return pick(config.creatorName, firstName(), skillsInWords())
+}
+
+function contactReply() {
+  return `Sure! Here's how to reach *${config.creatorName}* 👇\n\n📞 ${config.creatorPhone}\n💬 WhatsApp: ${waLink()}\n\nSend a short hello and say what it's about 🙏`
+}
+
+// "Who made you": the AI answers in its own words (matching the person's
+// tone), as long as it names the creator and doesn't dodge. Otherwise, or
+// when the AI is off or over its limit, one of the ready replies above.
+async function whoMadeAnswer(text, { senderName, history = [], isPrivate = false }) {
+  if (config.geminiApiKey && aiAllowed()) {
+    aiCount += 1
+    try {
+      const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate })
+      if (result.type === 'contact') return contactReply()
+      const named = new RegExp(firstName(), 'i').test(result.text || '')
+      const dodged = /confidential|classified|secret|can'?t (say|tell)|not allowed/i.test(result.text || '')
+      if (result.type === 'reply' && named && !dodged) return result.text
+    } catch (err) {
+      console.error('Who-made AI reply failed, using a ready reply:', err.message)
+    }
+  }
+  return whoMadeReply()
+}
+
+// "Send me the contact" -> the exact contact; "who made you" -> a human
+// answer that offers the contact. Returns null when it's neither.
+async function creatorAnswer(text, senderId, context) {
+  const t = stripMentions(text)
+  if (CONTACT_ASK.test(t)) {
+    contactOffered.delete(senderId)
+    return contactReply()
+  }
+  if (WHO_MADE.test(t)) {
+    contactOffered.set(senderId, Date.now())
+    if (contactOffered.size > 2000) contactOffered.delete(contactOffered.keys().next().value)
+    return whoMadeAnswer(text, context)
+  }
+  return null
 }
 
 // A real business enquiry: a deal, partnership, advert, sponsorship or a job,
@@ -280,7 +363,9 @@ export async function handlePrivateMessage(msg) {
   if (!text) return null
 
   if (isBusinessEnquiry(text)) return businessReply()
-  if (CREATOR_QUESTION.test(text)) return creatorReply()
+  if (acceptedContactOffer(msg.senderId, text)) return contactReply()
+  const aboutCreator = await creatorAnswer(text, msg.senderId, { senderName: msg.senderName, history: msg.history || [], isPrivate: true })
+  if (aboutCreator) return aboutCreator.slice(0, 1800)
   if (INTRO_WORDS.test(text) && /who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)/i.test(text)) return introReply()
 
   // Answer to a course list Bro Paul just sent ("first 3", "2", "MTH 222").
@@ -328,6 +413,12 @@ export async function handleMessage(msg) {
     }
   }
 
+  // "Yes, send it" right after Bro Paul offered his creator's contact.
+  if (acceptedContactOffer(msg.senderId, text)) {
+    senderLastTagged.set(msg.senderId, Date.now())
+    return contactReply()
+  }
+
   const introWords = INTRO_WORDS.test(text)
   const nameIntro = config.botMode !== 'tag_only' && introWords && BOT_NAME.test(text)
   if ((tagged && introWords) || nameIntro) {
@@ -349,16 +440,20 @@ export async function handleMessage(msg) {
     if (now - (senderLastReply.get(msg.senderId) || 0) < config.senderCooldownMs) return null
   }
 
+  const aboutCreator =
+    tagged && !isBusinessEnquiry(text)
+      ? await creatorAnswer(text, msg.senderId, { senderName: msg.senderName, history: msg.history || [] })
+      : null
   const reply =
     tagged && isBusinessEnquiry(text)
       ? businessReply()
-      : tagged && CREATOR_QUESTION.test(text)
-        ? creatorReply()
+      : aboutCreator
+        ? aboutCreator
         : isRequest
-        ? await resourceReply(text, msg.senderId)
-        : tagged
-          ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [] })
-          : null
+          ? await resourceReply(text, msg.senderId)
+          : tagged
+            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [] })
+            : null
   if (!reply) return null
 
   if (tagged) senderLastTagged.set(msg.senderId, now)

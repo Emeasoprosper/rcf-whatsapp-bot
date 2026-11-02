@@ -1,4 +1,4 @@
-import makeWASocket, { DisconnectReason } from '@whiskeysockets/baileys'
+import makeWASocket, { DisconnectReason, downloadMediaMessage } from '@whiskeysockets/baileys'
 import QRCode from 'qrcode'
 import pino from 'pino'
 import fs from 'node:fs'
@@ -11,7 +11,8 @@ import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
 import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups } from './groups.js'
 import { setStatus, startHeartbeat, currentStatus } from './status.js'
-import { HEART, isThanksOnly, isBirthdayWish, shouldReact } from './reactions.js'
+import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact } from './reactions.js'
+import { initStickers, learnSticker, forgetLastSticker, relabelLastSticker, stickerSummary, maybeSendSticker, splitStickerTag, MOODS } from './stickers.js'
 import { handleBirthdayWish } from './birthday.js'
 import { initState } from './state.js'
 import { startLiveSettings } from './liveSettings.js'
@@ -56,18 +57,76 @@ function readContext(msg) {
 // updates, channels and broadcast lists are not chats and are ignored.
 const isPrivateChat = (jid) => /@(s\.whatsapp\.net|lid)$/.test(jid)
 
+// The owner (CREATOR_PHONE, or anyone in STICKER_TEACHERS) can teach stickers.
+// WhatsApp may show a private chat as an @lid id; the phone number then
+// comes in remoteJidAlt / senderPn.
+function isStickerTeacher(m, jid) {
+  const digits = config.creatorPhone.replace(/\D/g, '')
+  const owner = digits.startsWith('0') ? `234${digits.slice(1)}` : digits
+  const allowed = [owner, ...config.stickerTeachers]
+  const ids = [jid, m.key.remoteJidAlt, m.key.senderPn, m.key.participantAlt].filter(Boolean).map(bareId)
+  return ids.some((id) => allowed.includes(id))
+}
+
+const MOOD_WORD = MOODS.join('|')
+
+// Owner-only text commands about the sticker pack. Returns a reply or null.
+async function stickerCommand(text) {
+  const t = text.trim().toLowerCase()
+  if (/^(my\s+|your\s+)?stickers\??$|^sticker\s+pack\??$/.test(t)) return stickerSummary()
+  if (/\b(forget|delete|remove)\s+(the\s+)?last\s+sticker\b/.test(t)) {
+    const gone = await forgetLastSticker()
+    return gone ? `Done, I've forgotten that ${gone.mood} sticker 🗑️` : 'There is no sticker to forget yet.'
+  }
+  const relabel = new RegExp(`\\blast\\s+sticker\\s+(is|=|means|for)\\s+(${MOOD_WORD})\\b`).exec(t)
+  if (relabel) {
+    const s = await relabelLastSticker(relabel[2])
+    return s ? `Got it, I'll use that one for *${s.mood}* ✅` : 'There is no sticker to correct yet.'
+  }
+  return null
+}
+
+async function learnFromOwner(sock, m, jid) {
+  try {
+    const webp = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage })
+    const { sticker, isNew } = await learnSticker(webp)
+    const reply = isNew
+      ? `Got it ${sticker.emoji || '✅'} I see: _${sticker.description || 'a sticker'}_.\nI'll use it for *${sticker.mood}* moments.\n\nWrong? Say *last sticker is thanks* (or funny, celebrate, prayer, greeting...).`
+      : `I already have this one (${sticker.mood}) 👍`
+    await sock.sendMessage(jid, { text: reply })
+  } catch (err) {
+    console.error('Learning sticker failed:', err.message)
+    await sock.sendMessage(jid, { text: "I couldn't read that sticker. Please send it again in a minute 🙏" }).catch(() => {})
+  }
+}
+
 async function onPrivateMessage(sock, m, jid) {
   if (!config.privateChats || m.key.fromMe) return
   const msg = unwrap(m.message)
   if (!msg) return
+
+  // Stickers sent to the bot: the owner is teaching the pack. Others are ignored.
+  if (msg.stickerMessage) {
+    if (isStickerTeacher(m, jid)) return learnFromOwner(sock, m, jid)
+    console.log(`[stickers] Sticker from ${bareId(jid)} ignored. To let this number teach stickers, add it to STICKER_TEACHERS.`)
+    return
+  }
+
   const text = readText(msg)
   if (!text) return
+
+  if (isStickerTeacher(m, jid)) {
+    const answer = await stickerCommand(text)
+    if (answer) return void sock.sendMessage(jid, { text: answer })
+  }
 
   const senderName = m.pushName || ''
   const history = recentChat(jid)
   remember(jid, { name: senderName, text })
 
   if (isThanksOnly(text)) {
+    // Now and then a "thank you" sticker instead of the heart.
+    if (await maybeSendSticker(sock, jid, 'thanks', { chance: 0.35 })) return
     if (config.reactions) await sock.sendMessage(jid, { react: { text: HEART, key: m.key } }).catch(() => {})
     return
   }
@@ -75,12 +134,16 @@ async function onPrivateMessage(sock, m, jid) {
   // Blue ticks + "typing…" while the AI thinks, like a real person.
   sock.readMessages([m.key]).catch(() => {})
   sock.sendPresenceUpdate('composing', jid).catch(() => {})
-  const reply = await handlePrivateMessage({ id: m.key.id, senderId: jid, senderName, text, history })
+  const raw = await handlePrivateMessage({ id: m.key.id, senderId: jid, senderName, text, history })
   sock.sendPresenceUpdate('paused', jid).catch(() => {})
-  if (!reply) return
+  if (!raw) return
 
-  await sock.sendMessage(jid, { text: reply })
-  remember(jid, { text: reply, fromBot: true })
+  const { text: reply, sticker } = splitStickerTag(raw)
+  if (reply) {
+    await sock.sendMessage(jid, { text: reply })
+    remember(jid, { text: reply, fromBot: true })
+  }
+  if (sticker) await maybeSendSticker(sock, jid, sticker)
   // Private chats stay private: the admin Activity tab only sees that one happened.
   logActivity('private', null, 'Answered a private chat')
 }
@@ -140,7 +203,8 @@ async function onMessage(sock, m) {
   if (!fromMe) remember(jid, { name: senderName, text })
 
   if (!fromMe && (mentionedBot || repliedToBot) && isThanksOnly(text)) {
-    await react() // "thanks Bro Paul" gets a heart, not a speech
+    // "thanks Bro Paul" gets a heart (or now and then a thank-you sticker), not a speech.
+    if (!(await maybeSendSticker(sock, jid, 'thanks', { chance: 0.35 }))) await react()
     return
   }
 
@@ -158,12 +222,13 @@ async function onMessage(sock, m) {
         await live.sendMessage(jid, content)
         remember(jid, { text: content.text, fromBot: true })
         logActivity('birthday', jid, content.text)
+        await maybeSendSticker(live, jid, 'celebrate', { chance: 0.6 })
       },
     })
     return
   }
 
-  const reply = await handleMessage({
+  const raw = await handleMessage({
     id: m.key.id,
     senderId,
     senderName,
@@ -175,11 +240,16 @@ async function onMessage(sock, m) {
     history,
   })
 
-  if (reply) {
-    await sock.sendMessage(jid, { text: reply }, { quoted: m })
-    remember(jid, { text: reply, fromBot: true })
-    const kind = /^Here's what I found|^I couldn't find/.test(reply) ? 'search' : 'reply'
-    logActivity(kind, jid, `${senderName || 'Member'}: "${text.slice(0, 80)}" → ${reply.slice(0, 120)}`)
+  if (raw) {
+    // The AI may end its reply with [sticker: mood]: text first, then the sticker.
+    const { text: reply, sticker } = splitStickerTag(raw)
+    if (reply) {
+      await sock.sendMessage(jid, { text: reply }, { quoted: m })
+      remember(jid, { text: reply, fromBot: true })
+      const kind = /^Here's what I found|^I couldn't find/.test(reply) ? 'search' : 'reply'
+      logActivity(kind, jid, `${senderName || 'Member'}: "${text.slice(0, 80)}" → ${reply.slice(0, 120)}`)
+    }
+    if (sticker) await maybeSendSticker(sock, jid, sticker)
     return
   }
 
@@ -193,8 +263,12 @@ async function onMessage(sock, m) {
     return
   }
 
-  // Good news, testimonies, shared materials: sometimes just a heart.
-  if (shouldReact(jid, { text, hasDocument })) await react()
+  // Good news, testimonies, shared materials: sometimes just a heart; for
+  // good news, now and then a celebration sticker instead.
+  if (shouldReact(jid, { text, hasDocument })) {
+    if (isGoodNews(text) && (await maybeSendSticker(sock, jid, 'celebrate', { chance: 0.5 }))) return
+    await react()
+  }
 }
 
 async function start() {
@@ -296,6 +370,7 @@ if (process.env.PORT) {
 process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason))
 
 await initState()
+await initStickers()
 await startLiveSettings()
 startActivityLog()
 start()
