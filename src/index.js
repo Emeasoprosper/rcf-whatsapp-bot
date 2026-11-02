@@ -144,8 +144,26 @@ async function learnFromOwner(sock, m, jid) {
   }
 }
 
+// The owner, typing on the bot's own phone, replies "answer" to a member's
+// voice note (e.g. one sent before the bot could hear them): the "answer"
+// is removed and the bot answers the voice note as if it had just arrived.
+const ANSWER_CMD = /^\W*(bro\s*paul\W*)?(answer|reply)(\s+(am|this|it|him|her))?\W*$/i
+
+async function answerOnBehalf(sock, m, jid) {
+  const msg = unwrap(m.message)
+  const text = msg ? readText(msg) : ''
+  if (!text || !ANSWER_CMD.test(text)) return
+  const ctx = readContext(msg)
+  if (!unwrap(ctx.quotedMessage)?.audioMessage || !ctx.stanzaId) return
+  sock.sendMessage(jid, { delete: m.key }).catch(() => {})
+  console.log(`[voice] Owner asked to answer an earlier voice note in ${bareId(jid)}`)
+  const voiceNote = { key: { remoteJid: jid, id: ctx.stanzaId, fromMe: false }, message: ctx.quotedMessage, pushName: '' }
+  return onPrivateMessage(sock, voiceNote, jid)
+}
+
 async function onPrivateMessage(sock, m, jid) {
-  if (!config.privateChats || m.key.fromMe) return
+  if (!config.privateChats) return
+  if (m.key.fromMe) return answerOnBehalf(sock, m, jid)
   const msg = unwrap(m.message)
   if (!msg) return
 
