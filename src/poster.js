@@ -298,7 +298,7 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
 const FEATURED_MEMORY = 60
 
 const FEATURED_FALLBACKS = [
-  (r) => `*This one could change how you see your whole semester* 👀\n\nI've been telling people about it all week. Short, practical and straight to the point, the kind of read you finish and immediately want to share 🔥\n\nOpen it today, thank me later 😄`,
+  (r) => `*This one could change how you see this season of your life* 👀\n\nI've been telling people about it all week. Short, practical and straight to the point, the kind of read you finish and immediately want to share 🔥\n\nOpen it today, thank me later 😄`,
   (r) => `*Looking for something worth your screen time today?* 📱\n\nSkip the endless scrolling for 20 minutes and give this a try. ${r.author ? `${r.author} has a way of saying things that just stick.` : 'It says things that just stick.'} 🙌\n\nIt's free on our library, go and see 👇`,
   (r) => `*Your future self will thank you for reading this* 🙏\n\nOne good book at the right time can reset your focus, your faith and your plans. This might be that book for you ✨\n\nTap the link and start the first page today.`,
 ]
