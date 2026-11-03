@@ -53,6 +53,13 @@ export async function refreshGroups() {
   }
 }
 
+// Called once for a group the bot has never been in before (so it can
+// introduce itself). Set from index.js.
+let newGroupHandler = null
+export function whenNewGroup(fn) {
+  newGroupHandler = fn
+}
+
 // sock is used to look up the group's name. Safe to call often: each group
 // is only reported once per run.
 export async function reportGroup(sock, jid, meta = null) {
@@ -67,6 +74,7 @@ export async function reportGroup(sock, jid, meta = null) {
     if (enabled) groups.add(jid)
     else groups.delete(jid)
     if (isNew) console.log(`[groups] New group "${info?.subject || jid}" registered${enabled ? ' and switched on' : ''}`)
+    if (isNew && enabled && newGroupHandler) newGroupHandler(jid)
   } catch (err) {
     // Try again in 10 minutes, not on every message (backend may be asleep).
     setTimeout(() => reported.delete(jid), 10 * 60 * 1000)

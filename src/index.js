@@ -5,12 +5,12 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { config } from './config.js'
-import { handleMessage, handlePrivateMessage, maybeChimeIn, REACT_MARKER, takeAiCall } from './handler.js'
+import { handleMessage, handlePrivateMessage, maybeChimeIn, REACT_MARKER, takeAiCall, newGroupIntro } from './handler.js'
 import { transcribeVoice } from './ai.js'
 import { remember, recentChat } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
-import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings } from './groups.js'
+import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup } from './groups.js'
 import { setStatus, startHeartbeat, currentStatus } from './status.js'
 import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact } from './reactions.js'
 import { initStickers, learnSticker, forgetLastSticker, relabelLastSticker, stickerSummary, maybeSendSticker, splitStickerTag, MOODS } from './stickers.js'
@@ -445,6 +445,24 @@ async function start() {
     if (newcomers.length) queueWelcome(() => currentSock, id, newcomers)
   })
 }
+
+// Added to a brand-new group: say hello once, after a short pause so it
+// doesn't land in the same second as "Bro Paul was added".
+whenNewGroup((jid) => {
+  setTimeout(async () => {
+    const sock = currentSock
+    if (!sock) return
+    const text = newGroupIntro()
+    try {
+      await sock.sendMessage(jid, { text })
+      remember(jid, { text, fromBot: true })
+      logActivity('intro', jid, 'Introduced himself in a new group')
+      await maybeSendSticker(sock, jid, 'greeting', { chance: 0.6 })
+    } catch (err) {
+      console.error('New group intro failed:', err.message)
+    }
+  }, 8000)
+})
 
 startHeartbeat(async () => {
   console.log('A superadmin asked to link a different number. Logging out...')

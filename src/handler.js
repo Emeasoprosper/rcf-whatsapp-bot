@@ -184,7 +184,14 @@ function introReply(audience = 'campus') {
     audience === 'campus'
       ? '📚 Find books, notes, past questions and audio in our digital library. Just ask, e.g. *anybody have GST 101 past questions?*\n❓ Answer study questions and chat when you tag me or reply to my message'
       : '📚 Find Christian books, devotionals, sermons and research resources in our digital library. Just ask, e.g. *any book on prayer?*\n❓ Answer questions and chat when you tag me or reply to my message'
-  return `Hello everyone! 👋 I'm *${config.botName}*, an AI assistant and the newest member of the RCF MOUAU Library Department. I work alongside our ${config.libraryHod}, and I'm so happy to serve the happiest people around! 😄\n\nHere's what I can do:\n${find}\n📢 Share library announcements and updates here\n📞 Tell you who built me and how to reach the developer\n\nOur library: ${config.siteUrl}\nGot materials? Upload them: ${config.siteUrl}/contribute/submit`
+  return `Hello everyone! 👋 I'm *${config.botName}*, an AI assistant and the newest member of the RCF MOUAU Library Department. I work alongside our ${config.libraryHod}, and I'm so happy to serve the happiest people around! 😄\n\nHere's what I can do:\n${find}\n📢 Share library announcements and updates here\n\nOur library: ${config.siteUrl}\nGot materials? Upload them: ${config.siteUrl}/contribute/submit`
+}
+
+// Posted once when the bot is added to a group it has never been in. The
+// group's type isn't set yet, so it fits any group, and like every intro it
+// doesn't bring up who made the bot (that's only for when someone asks).
+export function newGroupIntro() {
+  return `Hello everyone! 👋 I'm *${config.botName}*, the AI assistant from the RCF MOUAU Library Department. Thank you for having me here 😄\n\nHere's how I can help:\n📚 Find Christian books, devotionals, sermons and study materials in our free digital library. Just tag me and ask, e.g. *Bro Paul, any book on prayer?*\n❓ Answer questions and chat when you tag me or reply to one of my messages\n📢 Share library updates here now and then\n\n🌐 Library: ${config.siteUrl}`
 }
 
 // Past questions, lecture notes and other course materials, as opposed to
