@@ -50,8 +50,12 @@ export function isAllowedGroup(jid) {
   return groups.has(jid)
 }
 
+// A WhatsApp Community's parent is a container, not a chat: nothing can be
+// posted there. Its announcement group and linked groups are normal groups.
+const communityParents = new Set()
+
 export function allowedGroups() {
-  return [...groups]
+  return [...groups].filter((jid) => !communityParents.has(jid))
 }
 
 export async function refreshGroups() {
@@ -89,6 +93,11 @@ export async function reportGroup(sock, jid, meta = null) {
   reported.add(jid)
   try {
     const info = meta || (await sock.groupMetadata(jid).catch(() => null))
+    if (info?.isCommunity) {
+      communityParents.add(jid)
+      console.log(`[groups] "${info.subject || jid}" is a Community (parent), not a chat: skipped. Its groups are handled on their own.`)
+      return
+    }
     const { enabled, isNew } = await botApi('/groups', {
       method: 'POST',
       body: { jid, name: info?.subject || null, memberCount: info?.participants?.length ?? null },

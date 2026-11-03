@@ -23,6 +23,24 @@ const PROMO_CHECK_MS = 10 * 60 * 1000
 const WELCOME_BATCH_MS = 60 * 1000
 const MAX_IMAGE_FAILURES = 3
 
+// Safety net for scheduled posts: each one is tried at most MAX_TRIES times
+// per group per period (period = today's date, or the advert round), at
+// least RETRY_GAP_MS apart. A send can fail after WhatsApp already delivered
+// it, so retrying without a limit could post the same thing over and over.
+const MAX_TRIES = 2
+const RETRY_GAP_MS = 20 * 60 * 1000
+
+function mayTry(kind, jid, period) {
+  const tries = getState('postTries', {})
+  const id = `${kind}:${jid}`
+  const t = tries[id]
+  const same = t && t.period === period
+  if (same && (t.n >= MAX_TRIES || Date.now() - t.at < RETRY_GAP_MS)) return false
+  tries[id] = { period, n: same ? t.n + 1 : 1, at: Date.now() }
+  setState('postTries', tries)
+  return true
+}
+
 // Returns the sent message, whose key lets cleanup.js delete it later.
 async function send(sock, jid, content, logText) {
   const sent = await sock.sendMessage(jid, content)
@@ -160,10 +178,12 @@ async function maybePostPromo(getSock) {
     const texts = promoTexts(groupSettings(jid).audience)
     const text = texts[index % texts.length]
     const image = images.length ? images[index % images.length] : null
+    if (!mayTry('promo', jid, String(last))) continue
     try {
       const sent = await send(sock, jid, image ? { image: { url: image }, caption: text } : { text }, text)
-      rememberPost(jid, sent?.key, 'promo', { audience: groupSettings(jid).audience })
       lastPromo[jid] = Date.now()
+      setState('lastPromoAt', lastPromo)
+      rememberPost(jid, sent?.key, 'promo', { audience: groupSettings(jid).audience })
       console.log(`[promo] Upload advert posted in ${jid}${image ? ` with ${image}` : ''}`)
       logActivity('promo', jid, text.split('\n')[0])
     } catch (err) {
@@ -221,10 +241,14 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
   }
 
   for (const jid of due) {
+    if (!test && !mayTry('newMonth', jid, key)) continue
     try {
       const sent = await send(sock, jid, { text }, text)
+      if (!test) {
+        done[jid] = key
+        setState('newMonthPosted', done)
+      }
       rememberPost(jid, sent?.key, 'newMonth')
-      if (!test) done[jid] = key
       console.log(`[new-month] ${test ? 'TEST: ' : ''}Posted ${monthName} greeting in ${jid}${selfAware ? ' (with the bot wink)' : ''}`)
       logActivity('new-month', jid, text)
     } catch (err) {
@@ -306,10 +330,19 @@ export async function maybeMorningPost(getSock, { test = false } = {}) {
     const withVerse = test || morningPost
     const withTip = test || studyTipOn(jid)
     const text = morningMessage(daily, audience, { withVerse, withTip })
+    if (!test && !mayTry('morning', jid, key)) continue
+    // Marked as done as soon as the first message is out, so a problem with
+    // the second card (or anything after) never re-sends the morning post.
+    const markDone = () => {
+      if (test) return
+      done[jid] = key
+      setState('morningPosted', done)
+    }
     try {
       if (cards) {
         // The first card carries the message; the tip card follows the verse card.
         const sent = await send(sock, jid, { image: withVerse ? cards[0] : cards[1], caption: text }, text)
+        markDone()
         rememberPost(jid, sent?.key, 'morning', { verse: withVerse, tip: withTip })
         if (withVerse && withTip) {
           const tipCard = await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
@@ -317,11 +350,8 @@ export async function maybeMorningPost(getSock, { test = false } = {}) {
         }
       } else {
         const sent = await send(sock, jid, { text }, text)
+        markDone()
         rememberPost(jid, sent?.key, 'morning', { verse: withVerse, tip: withTip })
-      }
-      if (!test) {
-        done[jid] = key
-        setState('morningPosted', done)
       }
       const what = [withVerse && 'verse', withTip && 'study tip'].filter(Boolean).join(' and ')
       console.log(`[morning] ${test ? 'TEST: ' : ''}Posted ${what} in ${jid}`)
@@ -450,24 +480,29 @@ export async function maybeFeaturedPost(getSock, { test = false } = {}) {
     if (!test && minutesToGo > 0) return
 
     const { post } = featuredReady
-    let sent = 0
+    let postedCount = 0
     for (const jid of due) {
+      if (!test && !mayTry('featured', jid, key)) continue
+      let message
       try {
-        const sent = await send(sock, jid, post.image ? { image: post.image, caption: post.caption } : { text: post.caption }, post.caption)
-        rememberPost(jid, sent?.key, 'featured')
-        sent += 1
-        if (!test) {
-          done[jid] = key
-          setState('featuredPosted', done)
-        }
-        console.log(`[featured] ${test ? 'TEST: ' : ''}Posted "${post.resource.title}" in ${jid}`)
-        logActivity('featured', jid, `Book of the day: ${post.resource.title}`)
+        message = await send(sock, jid, post.image ? { image: post.image, caption: post.caption } : { text: post.caption }, post.caption)
       } catch (err) {
-        // Not marked as done, so the next check (30 seconds) tries this group again.
-        console.error('Book of the day post failed, will retry:', err.message)
+        // Not marked as done: tried once more later (see mayTry), never more.
+        console.error('Book of the day post failed:', err.message)
+        continue
       }
+      // Marked as done straight after WhatsApp accepted it, before anything
+      // else, so nothing that goes wrong afterwards can make it post again.
+      if (!test) {
+        done[jid] = key
+        setState('featuredPosted', done)
+      }
+      postedCount += 1
+      rememberPost(jid, message?.key, 'featured')
+      console.log(`[featured] ${test ? 'TEST: ' : ''}Posted "${post.resource.title}" in ${jid}`)
+      logActivity('featured', jid, `Book of the day: ${post.resource.title}`)
     }
-    if (!test && sent) {
+    if (!test && postedCount) {
       const history = getState('featuredHistory', [])
       setState('featuredHistory', [post.resource.id, ...history.filter((id) => id !== post.resource.id)].slice(0, FEATURED_MEMORY))
     }
