@@ -4,6 +4,7 @@ import { searchLibrary } from './library.js'
 import { askAi, askChimeIn } from './ai.js'
 import { activity, recentChat } from './chatMemory.js'
 import { liveFacts } from './liveSettings.js'
+import { groupSettings } from './groups.js'
 import { parseLevelRequest, levelLabel, findCoursesAtLevel, formatItems, courseMenu, rememberMenu, hasPendingMenu, answerMenu } from './levelSearch.js'
 
 let knowledgeEntries = []
@@ -178,9 +179,29 @@ const BOT_NAME = /\bbro\s*paul\b/i
 const INTRO_COOLDOWN_MS = 2 * 60 * 60 * 1000
 let lastIntroAt = 0
 
-function introReply() {
-  return `Hello everyone! 👋 I'm *${config.botName}*, an AI assistant and the newest member of the RCF MOUAU Library Department. I work alongside our ${config.libraryHod}, and I'm so happy to serve the happiest people on campus! 😄\n\nHere's what I can do:\n📚 Find books, notes, past questions and audio in our digital library. Just ask, e.g. *anybody have GST 101 past questions?*\n❓ Answer study questions and chat when you tag me or reply to my message\n📢 Share library announcements and updates here\n📞 Tell you who built me and how to reach the developer\n\nOur library: ${config.siteUrl}\nGot materials? Upload them: ${config.siteUrl}/contribute/submit`
+function introReply(audience = 'campus') {
+  const find =
+    audience === 'campus'
+      ? '📚 Find books, notes, past questions and audio in our digital library. Just ask, e.g. *anybody have GST 101 past questions?*\n❓ Answer study questions and chat when you tag me or reply to my message'
+      : '📚 Find Christian books, devotionals, sermons and research resources in our digital library. Just ask, e.g. *any book on prayer?*\n❓ Answer questions and chat when you tag me or reply to my message'
+  return `Hello everyone! 👋 I'm *${config.botName}*, an AI assistant and the newest member of the RCF MOUAU Library Department. I work alongside our ${config.libraryHod}, and I'm so happy to serve the happiest people around! 😄\n\nHere's what I can do:\n${find}\n📢 Share library announcements and updates here\n📞 Tell you who built me and how to reach the developer\n\nOur library: ${config.siteUrl}\nGot materials? Upload them: ${config.siteUrl}/contribute/submit`
 }
+
+// Past questions, lecture notes and other course materials, as opposed to
+// books, devotionals and sermons.
+const ACADEMIC_WORDS = /\b(past\s*questions?|p\.?q|lecture\s*notes?|notes?|lectures?|handouts?|slides?|manuals?|syllabus|courses?)\b/i
+
+function isAcademicRequest(text) {
+  return ACADEMIC_WORDS.test(text) || new RegExp(COURSE_CODE.source, 'i').test(text) || Boolean(parseLevelRequest(text))
+}
+
+// A group that isn't for students: course materials are never offered by
+// name, only as resources for research.
+function researchReply() {
+  return `For students who want to collect resources for research, the RCF digital library has books and materials you can access free 📚\n\n🌐 ${config.siteUrl}`
+}
+
+const FOR_MOUAU = 'For MOUAU students 🎓, you can access these on the RCF library:\n\n'
 
 // Starts with the bot's name, or names it in a question: "Bro Paul, ..." / "... bro paul?"
 function addressedByName(text) {
@@ -292,7 +313,19 @@ async function levelReply(text, ask, senderId) {
   }
 }
 
-async function resourceReply(text, senderId = '') {
+// audience = the group's setting ('campus' in private chats). In a 'general'
+// group course materials get the research line; in a 'mixed' one they're
+// introduced as being for MOUAU students.
+async function resourceReply(text, senderId = '', audience = 'campus') {
+  const academic = audience !== 'campus' && isAcademicRequest(stripMentions(text))
+  if (academic && audience === 'general') return researchReply()
+  const reply = await searchReply(text, senderId)
+  if (!academic) return reply
+  // "For MOUAU students, you can access these…" only makes sense with results.
+  return /^(I couldn't find|I don't have|The library is slow)/.test(reply) ? `For MOUAU students 🎓: ${reply}` : FOR_MOUAU + reply
+}
+
+async function searchReply(text, senderId) {
   const ask = parseLevelRequest(stripMentions(text))
   if (ask) return levelReply(text, ask, senderId)
   const query = extractSearchQuery(stripMentions(text))
@@ -341,13 +374,13 @@ function humanFallback(text, { tired = false } = {}) {
   return tired ? `${pickLine(TIRED_LINES)}${config.siteUrl}` : pickLine(BUSY_LINES)
 }
 
-async function aiReply(text, { senderName, senderId = '', history, isPrivate = false }) {
+async function aiReply(text, { senderName, senderId = '', history, isPrivate = false, audience = 'campus' }) {
   if (!aiAllowed()) return humanFallback(text, { tired: true })
   aiCount += 1
   try {
-    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate })
+    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience })
     // The AI decided the member is asking for a material: look it up for real.
-    if (result.type === 'search') return await resourceReply(result.query, senderId)
+    if (result.type === 'search') return await resourceReply(result.query, senderId, audience)
     // Business or a request for the owner: the direct contact in DM (the AI
     // has talked it through first), an invite to the DM in a group.
     if (result.type === 'contact') return isPrivate ? businessReply() : dmInviteReply()
@@ -365,7 +398,7 @@ const chimeBusy = new Set()
 // when the group is in a lively discussion and the AI decides it can add
 // something useful, otherwise null.
 export async function maybeChimeIn(groupId) {
-  if (!config.chimeIn || !isActiveHours() || chimeBusy.has(groupId)) return null
+  if (!config.chimeIn || !isActiveHours() || chimeBusy.has(groupId) || !groupSettings(groupId).chimeIn) return null
   const now = Date.now()
   if (now - (lastChimeAt.get(groupId) || 0) < config.chimeCooldownMs) return null
 
@@ -380,7 +413,7 @@ export async function maybeChimeIn(groupId) {
   lastChimeAt.set(groupId, now)
   try {
     aiCount += 1
-    const text = await askChimeIn({ history: recentChat(groupId), knowledgeEntries: allKnowledge() })
+    const text = await askChimeIn({ history: recentChat(groupId), knowledgeEntries: allKnowledge(), audience: groupSettings(groupId).audience })
     return text ? text.slice(0, 1200) : null
   } catch (err) {
     console.error('Chime-in failed:', err.message)
@@ -435,7 +468,7 @@ export async function handlePrivateMessage(msg) {
   return reply ? reply.slice(0, 1800) : null
 }
 
-// msg = { id, senderId, senderName, text, isGroup, fromMe, mentionedBot, repliedToBot, history }
+// msg = { id, groupId, senderId, senderName, text, isGroup, fromMe, mentionedBot, repliedToBot, history }
 // history = recent group messages (oldest first), not including this one.
 // Returns a reply string, or null when the bot should stay silent.
 export async function handleMessage(msg) {
@@ -444,6 +477,7 @@ export async function handleMessage(msg) {
 
   const text = msg.text.trim()
   if (!text) return null
+  const { audience } = groupSettings(msg.groupId)
 
   // "Tagged" = the member is talking to the bot: @mention, a reply to one of
   // its messages, or starting the message with its name.
@@ -474,7 +508,7 @@ export async function handleMessage(msg) {
     const introNow = Date.now()
     if (introNow - lastIntroAt >= INTRO_COOLDOWN_MS) {
       lastIntroAt = introNow
-      return introReply()
+      return introReply(audience)
     }
     if (!tagged) return null
   }
@@ -499,9 +533,9 @@ export async function handleMessage(msg) {
       : aboutCreator
         ? aboutCreator
         : isRequest
-          ? await resourceReply(text, msg.senderId)
+          ? await resourceReply(text, msg.senderId, audience)
           : tagged
-            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [] })
+            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], audience })
             : null
   if (!reply) return null
 

@@ -82,6 +82,7 @@ export async function featuredCandidates() {
         categories: r.categories || [],
         coverUrl: r.thumbnail_url.startsWith('/') ? `${config.backendUrl}${r.thumbnail_url}` : r.thumbnail_url,
         url: `${config.siteUrl}/library/${r.id}`,
+        academic: PLAIN.test(kind),
         score,
       }
     })

@@ -54,6 +54,16 @@ const STICKER_RULE = `
 
 Stickers: you have a sticker pack. Only now and then (roughly one reply in six), when a sticker would truly fit, such as something funny, good news to celebrate, thanks, a greeting, good night, a prayer, encouragement before exams or sympathy, put this on its own last line: [sticker: MOOD] with MOOD one of funny, celebrate, thanks, love, greeting, goodnight, prayer, wow, agree, encourage, sad, sorry, study. Never mention the tag or explain it. Never use it in serious, sad or argumentative moments unless the mood is sad or sorry.`
 
+// Who the group is for, set per group in the admin app. 'campus' adds nothing.
+const AUDIENCE_RULES = {
+  mixed: `
+
+This group has MOUAU students and people who aren't students. Don't bring up past questions, lecture notes or course materials yourself. If someone asks for them, that's fine (reply SEARCH as usual); the system introduces them as being for MOUAU students.`,
+  general: `
+
+This group is NOT a student group. Never mention past questions, lecture notes, handouts, courses or exams. When the library comes up, talk about books, devotionals, sermons and resources for anyone doing research or growing in life and faith. If someone asks for past questions or lecture notes, reply with ONLY: SEARCH: <their words> and the system answers it.`,
+}
+
 // Strip angle brackets so a member can't fake the closing tags below.
 const clean = (s, max) => String(s || '').replace(/[<>]/g, ' ').slice(0, max)
 
@@ -102,7 +112,7 @@ async function callGeminiOnce(body) {
 
 // Returns { type: 'reply', text }, { type: 'search', query } or { type: 'contact' }.
 // isPrivate = a one-to-one chat with the bot number instead of a group.
-export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [], isPrivate = false }) {
+export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [], isPrivate = false, audience = 'campus' }) {
   const info = knowledgeEntries.length
     ? knowledgeEntries.map((e) => `- ${e.title}: ${e.text}`).join('\n')
     : '(none provided)'
@@ -111,7 +121,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
     : '(no earlier messages)'
 
   const text = await callGemini({
-    systemInstruction: { parts: [{ text: (isPrivate ? SYSTEM_RULES + PRIVATE_RULES : SYSTEM_RULES) + STICKER_RULE }] },
+    systemInstruction: { parts: [{ text: (isPrivate ? SYSTEM_RULES + PRIVATE_RULES : SYSTEM_RULES + (AUDIENCE_RULES[audience] || '')) + STICKER_RULE }] },
     contents: [
       {
         role: 'user',
@@ -283,14 +293,14 @@ If you shouldn't jump in, reply with exactly: SKIP
 Otherwise reply with only the message itself. Don't mention that you were "watching" the chat.`
 
 // Returns a message to post, or null to stay quiet.
-export async function askChimeIn({ history = [], knowledgeEntries = [] }) {
+export async function askChimeIn({ history = [], knowledgeEntries = [], audience = 'campus' }) {
   const info = knowledgeEntries.length
     ? knowledgeEntries.map((e) => `- ${e.title}: ${e.text}`).join('\n')
     : '(none provided)'
   const chat = history.map((h) => `${clean(h.name, 40)}: ${clean(h.text, 300)}`).join('\n')
 
   const text = await callGemini({
-    systemInstruction: { parts: [{ text: CHIME_RULES }] },
+    systemInstruction: { parts: [{ text: CHIME_RULES + (AUDIENCE_RULES[audience] || '') }] },
     contents: [
       { role: 'user', parts: [{ text: `<approved_info>\n${info}\n</approved_info>\n<recent_chat>\n${chat}\n</recent_chat>` }] },
     ],

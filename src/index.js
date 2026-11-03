@@ -10,7 +10,7 @@ import { transcribeVoice } from './ai.js'
 import { remember, recentChat } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
-import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups } from './groups.js'
+import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings } from './groups.js'
 import { setStatus, startHeartbeat, currentStatus } from './status.js'
 import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact } from './reactions.js'
 import { initStickers, learnSticker, forgetLastSticker, relabelLastSticker, stickerSummary, maybeSendSticker, splitStickerTag, MOODS } from './stickers.js'
@@ -297,7 +297,7 @@ async function onMessage(sock, m) {
     return
   }
 
-  if (!fromMe && config.birthdayWishes && isBirthdayWish(text)) {
+  if (!fromMe && config.birthdayWishes && groupSettings(jid).birthdays && isBirthdayWish(text)) {
     if (shouldReact(jid, { text, birthday: true })) await react()
     handleBirthdayWish({
       groupId: jid,
@@ -319,6 +319,7 @@ async function onMessage(sock, m) {
 
   const raw = await handleMessage({
     id: m.key.id,
+    groupId: jid,
     senderId,
     senderName,
     text,

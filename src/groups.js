@@ -9,7 +9,30 @@ import { botApi } from './backend.js'
 // - Without it: only ALLOWED_GROUP_JID from .env.
 const backendOn = () => Boolean(config.botApiKey)
 let groups = new Set(config.allowedGroups)
+let settingsByGroup = {}
 const reported = new Set()
+
+// Set per group on the admin app's WhatsApp Bot page.
+// audience: 'campus' (MOUAU students), 'mixed' or 'general' (not students).
+const DEFAULT_GROUP_SETTINGS = {
+  audience: 'campus',
+  bookOfDay: true,
+  morningPost: true,
+  promos: true,
+  welcome: true,
+  chimeIn: true,
+  newMonth: true,
+  birthdays: true,
+}
+
+export function groupSettings(jid) {
+  return { ...DEFAULT_GROUP_SETTINGS, ...(settingsByGroup[jid] || {}) }
+}
+
+// The groups where a kind of post is switched on, e.g. allowedGroupsFor('bookOfDay').
+export function allowedGroupsFor(key) {
+  return allowedGroups().filter((jid) => groupSettings(jid)[key] !== false)
+}
 
 export function isAllowedGroup(jid) {
   return groups.has(jid)
@@ -22,8 +45,9 @@ export function allowedGroups() {
 export async function refreshGroups() {
   if (!backendOn()) return
   try {
-    const { jids = [] } = await botApi('/groups')
+    const { jids = [], settings = {} } = await botApi('/groups')
     groups = new Set(jids)
+    settingsByGroup = settings
   } catch (err) {
     console.error('Could not refresh group list:', err.message)
   }

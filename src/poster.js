@@ -4,7 +4,7 @@ import { config, isActiveHours } from './config.js'
 import { getState, setState } from './state.js'
 import { remember, lastHumanMessageAt } from './chatMemory.js'
 import { botApi } from './backend.js'
-import { allowedGroups, isAllowedGroup } from './groups.js'
+import { allowedGroups, allowedGroupsFor, groupSettings, isAllowedGroup } from './groups.js'
 import { askNewMonthWish, askFeaturedCaption } from './ai.js'
 import { logActivity } from './activity.js'
 import { quoteCard, coverCard, HANDLE } from './quoteImage.js'
@@ -96,9 +96,18 @@ async function pollAnnouncements(getSock) {
 
 // ---------- "Upload to the library" adverts ----------
 
-function promoTexts() {
+// audience = the group's setting: only 'campus' groups hear about past
+// questions and lecture notes.
+function promoTexts(audience = 'campus') {
   const site = config.siteUrl
   const upload = `${site}/contribute/submit`
+  if (audience !== 'campus') {
+    return [
+      `📚 *Got a good book on your phone?*\n\nThat PDF you loved could bless someone else! 🙌 Share it on the RCF digital library so others can read it too: Christian books, devotionals, sermons, self-development and research materials.\n\n📤 Share here: ${upload}\n\n"Freely you have received, freely give." Matthew 10:8`,
+      `✨ *The RCF Library grows because of YOU!*\n\nBooks, devotionals, audio sermons and resources for students and anyone doing research. Every upload helps someone grow.\n\n📤 Upload: ${upload}\n🌐 Explore: ${site}`,
+      `📖 *Looking for something good to read?*\n\nThe RCF digital library has free books and devotionals for faith, life, money, purpose and more. Students who want to collect resources for research will find plenty too.\n\n🌐 ${site}\n📤 Have a good book? Share it: ${upload}`,
+    ]
+  }
   return [
     `📚 *Got past questions or notes on your phone?*\n\nThat PDF sitting in your gallery could save someone's semester! 🙌 Upload it to the RCF Library so every member can find it.\n\n📤 Upload here: ${upload}\n\n"Freely you have received, freely give." Matthew 10:8`,
     `🎓 *Help a fellow student today!*\n\nShare your lecture notes, handouts, textbooks or past questions on the RCF digital library. It takes less than a minute.\n\n📤 ${upload}\n🔎 Need something? Just ask me here, e.g. *Bro Paul, CHM 101 past questions*`,
@@ -124,17 +133,17 @@ async function maybePostPromo(getSock) {
 
   const lastPromo = getState('lastPromoAt', {})
   const intervalMs = config.promoEveryHours * 60 * 60 * 1000
-  const texts = promoTexts()
   const images = promoImages()
   let index = getState('promoIndex', 0)
 
-  for (const jid of allowedGroups()) {
+  for (const jid of allowedGroupsFor('promos')) {
     const last = lastPromo[jid] || 0
     if (Date.now() - last < intervalMs) continue
     // Only advertise in a group that's been active since the last advert,
     // so the bot never talks to an empty room.
     if (last && lastHumanMessageAt(jid) < last) continue
 
+    const texts = promoTexts(groupSettings(jid).audience)
     const text = texts[index % texts.length]
     const image = images.length ? images[index % images.length] : null
     try {
@@ -178,7 +187,7 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
 
   const key = `${year}-${monthName}`
   const done = getState('newMonthPosted', {})
-  const due = test ? config.allowedGroups : allowedGroups().filter((jid) => done[jid] !== key)
+  const due = test ? config.allowedGroups : allowedGroupsFor('newMonth').filter((jid) => done[jid] !== key)
   if (due.length === 0) {
     if (test) console.log('[new-month] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
     return
@@ -215,19 +224,23 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
 const MORNING_FROM_HOUR = 7
 const MORNING_UNTIL_HOUR = 12
 
-function morningMessage({ verse, tip }) {
+// A 'general' (not students) group gets the verse without the study tip.
+function morningMessage({ verse, tip }, audience = 'campus') {
   const weekday = new Date().toLocaleDateString('en-GB', { timeZone: 'Africa/Lagos', weekday: 'long' })
+  const more = {
+    campus: `More books, notes and past questions: ${config.siteUrl}`,
+    mixed: `More books and study resources: ${config.siteUrl}`,
+    general: `Free Christian books and devotionals: ${config.siteUrl}`,
+  }[audience] || ''
   return [
     `☀️ *Good morning, family! Happy ${weekday}.*`,
     '',
     '📖 *Verse of the day*',
     `"${verse.text}"`,
     `— *${verse.ref}*`,
+    ...(audience === 'general' ? [] : ['', '💡 *Study tip*', tip.text]),
     '',
-    '💡 *Study tip*',
-    tip.text,
-    '',
-    `Have a blessed day 🙏 More books, notes and past questions: ${config.siteUrl}`,
+    `Have a blessed day 🙏 ${more}`,
   ].join('\n')
 }
 
@@ -242,7 +255,7 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
 
   const key = `${year}-${monthName}-${day}`
   const done = getState('morningPosted', {})
-  const due = test ? config.allowedGroups : allowedGroups().filter((jid) => done[jid] !== key)
+  const due = test ? config.allowedGroups : allowedGroupsFor('morningPost').filter((jid) => done[jid] !== key)
   if (due.length === 0) {
     if (test) console.log('[morning] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
     return
@@ -257,8 +270,6 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
     console.error('Morning post: could not get today\'s verse yet:', err.message)
     return
   }
-  const text = morningMessage(daily)
-
   // The verse and the tip as square cards, like the app shows them. Drawn
   // once in memory for all groups and never saved. If drawing fails, the
   // plain text message still goes out.
@@ -273,10 +284,12 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
   }
 
   for (const jid of due) {
+    const { audience } = groupSettings(jid)
+    const text = morningMessage(daily, audience)
     try {
       if (cards) {
         await send(sock, jid, { image: cards[0], caption: text }, text)
-        await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
+        if (audience !== 'general') await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
       } else {
         await send(sock, jid, { text }, text)
       }
@@ -315,7 +328,9 @@ async function fetchCover(url) {
 // isn't always the same top book) and makes its picture and words.
 async function prepareFeatured() {
   const history = getState('featuredHistory', [])
-  const all = await featuredCandidates()
+  // Never past questions or lecture notes: the post goes to every kind of
+  // group, including ones that aren't for students.
+  const all = (await featuredCandidates()).filter((r) => !r.academic)
   const fresh = all.filter((r) => !history.includes(r.id))
   const pool = (fresh.length ? fresh : all).slice(0, 8)
   if (pool.length === 0) return null
@@ -386,7 +401,7 @@ export async function maybeFeaturedPost(getSock, { test = false } = {}) {
   if (!test && (hour >= FEATURED_UNTIL_HOUR || minutesToGo > FEATURED_PREP_MINUTES)) return
 
   const done = getState('featuredPosted', {})
-  const due = test ? config.allowedGroups : allowedGroups().filter((jid) => done[jid] !== key)
+  const due = test ? config.allowedGroups : allowedGroupsFor('bookOfDay').filter((jid) => done[jid] !== key)
   if (due.length === 0) {
     if (test) console.log('[featured] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
     return
@@ -438,7 +453,7 @@ export async function maybeFeaturedPost(getSock, { test = false } = {}) {
 const pendingWelcomes = new Map()
 
 export function queueWelcome(getSock, groupId, memberIds) {
-  if (!config.welcomeNewMembers || !isAllowedGroup(groupId)) return
+  if (!config.welcomeNewMembers || !isAllowedGroup(groupId) || !groupSettings(groupId).welcome) return
   const entry = pendingWelcomes.get(groupId) || { ids: new Set(), timer: null }
   memberIds.forEach((id) => entry.ids.add(id))
   pendingWelcomes.set(groupId, entry)
@@ -451,7 +466,11 @@ export function queueWelcome(getSock, groupId, memberIds) {
     const ids = [...entry.ids].slice(0, 20)
     if (!sock || ids.length === 0 || !isActiveHours()) return
     const tags = ids.map((id) => `@${id.split('@')[0].split(':')[0]}`).join(' ')
-    const text = `Welcome to the family, ${tags}! 🎉🙏\n\nI'm *${config.botName}* from the RCF Library Department. Need a textbook, past question or notes? Just tag me or ask here, e.g. *Bro Paul, GST 101 past questions*.\n\n📚 Library: ${config.siteUrl}\n📤 Share your materials: ${config.siteUrl}/contribute/submit`
+    const ask =
+      groupSettings(groupId).audience === 'campus'
+        ? 'Need a textbook, past question or notes? Just tag me or ask here, e.g. *Bro Paul, GST 101 past questions*.'
+        : 'Looking for a good book or devotional? Just tag me or ask here, e.g. *Bro Paul, any book on prayer?*'
+    const text = `Welcome to the family, ${tags}! 🎉🙏\n\nI'm *${config.botName}* from the RCF Library Department. ${ask}\n\n📚 Library: ${config.siteUrl}\n📤 Share your materials: ${config.siteUrl}/contribute/submit`
     try {
       await send(sock, groupId, { text, mentions: ids }, text)
       logActivity('welcome', groupId, `Welcomed ${ids.length} new member${ids.length === 1 ? '' : 's'}`)
