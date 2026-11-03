@@ -25,35 +25,68 @@ function speakable(text) {
     .trim()
 }
 
-async function geminiSpeech(text) {
+const STYLE =
+  'Read this WhatsApp voice reply aloud as a friendly young Nigerian man, warm and relaxed, with a natural Nigerian English accent ' +
+  '(read any Pidgin naturally). Read only the message:\n\n'
+
+// The speech model sometimes answers with no audio (or is briefly busy on
+// the free tier), so it gets a few tries; the last one drops the style note.
+const RETRYABLE = new Set([429, 500, 503])
+const WAIT_MS = [4000, 20000]
+let pausedUntil = 0
+
+async function geminiSpeechOnce(text, styled) {
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${config.ttsModel}:generateContent`, {
     method: 'POST',
     signal: AbortSignal.timeout(45000),
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.geminiApiKey },
     body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            {
-              text:
-                'Read this WhatsApp voice reply aloud as a friendly young Nigerian man, warm and relaxed, with a natural Nigerian English accent ' +
-                `(read any Pidgin naturally). Read only the message:\n\n${text}`,
-            },
-          ],
-        },
-      ],
+      contents: [{ parts: [{ text: styled ? STYLE + text : text }] }],
       generationConfig: {
         responseModalities: ['AUDIO'],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: config.ttsVoice } } },
       },
     }),
   })
-  if (!res.ok) throw new Error(`Gemini speech failed (${res.status}): ${(await res.text().catch(() => '')).slice(0, 150)}`)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    // Daily allowance used up (free tier: about 10 voice notes a day):
+    // stop asking until it resets, so text replies aren't held up.
+    if (res.status === 429 && /PerDay/i.test(body)) {
+      const secs = Number(/"retryDelay":\s*"(\d+)s"/.exec(body)?.[1]) || 6 * 3600
+      pausedUntil = Date.now() + secs * 1000
+      const err = new Error(`daily voice allowance used up; voice notes resume in about ${Math.ceil(secs / 3600)}h`)
+      err.retry = false
+      throw err
+    }
+    const err = new Error(`Gemini speech failed (${res.status}): ${body.replace(/\s+/g, ' ').slice(0, 150)}`)
+    err.retry = RETRYABLE.has(res.status)
+    throw err
+  }
   const data = await res.json()
-  const audio = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData)?.inlineData
-  if (!audio?.data) throw new Error('Gemini speech returned no audio')
+  const candidate = data.candidates?.[0]
+  const audio = candidate?.content?.parts?.find((p) => p.inlineData)?.inlineData
+  if (!audio?.data) {
+    const why = candidate?.finishReason || data.promptFeedback?.blockReason || 'empty answer'
+    const err = new Error(`Gemini speech returned no audio (${why})`)
+    err.retry = true
+    throw err
+  }
   const rate = Number(/rate=(\d+)/.exec(audio.mimeType || '')?.[1]) || 24000
   return { pcm: Buffer.from(audio.data, 'base64'), rate }
+}
+
+async function geminiSpeech(text) {
+  for (let attempt = 0; ; attempt += 1) {
+    const last = attempt === WAIT_MS.length
+    try {
+      return await geminiSpeechOnce(text, !last)
+    } catch (err) {
+      if (last || !err.retry) throw err
+      console.warn(`Voice try ${attempt + 1} failed, retrying:`, err.message)
+      await new Promise((r) => setTimeout(r, WAIT_MS[attempt]))
+    }
+  }
 }
 
 // Raw 16-bit PCM -> OGG Opus, the format WhatsApp plays as a voice note.
@@ -79,6 +112,7 @@ function toVoiceNote(pcm, rate) {
 // Returns { audio, seconds } ready to send, or null.
 export async function speak(text) {
   if (!config.voiceReplies || !config.geminiApiKey) return null
+  if (Date.now() < pausedUntil) return null
   const words = speakable(text)
   if (!words) return null
   try {
