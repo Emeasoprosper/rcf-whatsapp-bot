@@ -11,7 +11,8 @@ import { transcribeVoice } from './ai.js'
 import { remember, recentChat, inPrayer } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
-import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup } from './groups.js'
+import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup, whenSettingsChange } from './groups.js'
+import { rememberPost, introSignature, cleanUpGroup } from './cleanup.js'
 import { setStatus, startHeartbeat, currentStatus } from './status.js'
 import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact, isPrayerLike } from './reactions.js'
 import { initStickers, learnSticker, forgetLastSticker, relabelLastSticker, stickerSummary, maybeSendSticker, splitStickerTag, MOODS } from './stickers.js'
@@ -387,7 +388,10 @@ async function onMessage(sock, m) {
     // The AI may end its reply with [sticker: mood]: text first, then the sticker.
     const { text: reply, sticker } = splitStickerTag(raw)
     if (reply) {
-      await sock.sendMessage(jid, { text: reply }, { quoted: m })
+      const sent = await sock.sendMessage(jid, { text: reply }, { quoted: m })
+      // "Who are you?" gets the introduction: remember it so it can be
+      // cleaned up if the group's settings change.
+      if (reply.startsWith('Hello everyone! 👋')) rememberPost(jid, sent?.key, 'intro', { signature: introSignature(jid) })
       remember(jid, { text: reply, fromBot: true })
       const kind = /^Here's what I found|^I couldn't find/.test(reply) ? 'search' : 'reply'
       logActivity(kind, jid, `${senderName || 'Member'}: "${text.slice(0, 80)}" → ${reply.slice(0, 120)}`)
@@ -494,6 +498,18 @@ async function start() {
 // A brand-new group waits silently under "New groups" in the admin app until
 // a superadmin clicks Introduce or Start quietly (see poster.js sendOutbox).
 whenNewGroup((jid) => console.log(`[groups] Waiting in ${jid} until a superadmin introduces or starts Bro Paul there.`))
+
+// Settings changed in the admin app: delete his recent posts there that no
+// longer fit (see cleanup.js).
+// Not connected yet (e.g. just after a restart): try again shortly.
+function cleanUpWhenConnected(jid, tries = 0) {
+  if (!currentSock) {
+    if (tries < 10) setTimeout(() => cleanUpWhenConnected(jid, tries + 1), 60 * 1000)
+    return
+  }
+  cleanUpGroup(currentSock, jid).catch((err) => console.error('Cleanup failed:', err.message))
+}
+whenSettingsChange((jid) => cleanUpWhenConnected(jid))
 
 startHeartbeat(async () => {
   console.log('A superadmin asked to link a different number. Logging out...')

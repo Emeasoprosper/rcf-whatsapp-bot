@@ -58,11 +58,21 @@ export async function refreshGroups() {
   if (!backendOn()) return
   try {
     const { jids = [], settings = {} } = await botApi('/groups')
+    // Groups whose settings changed (or that are seen for the first time
+    // since a restart), so posts that no longer fit can be cleaned up.
+    const changed = jids.filter((jid) => JSON.stringify(settings[jid]) !== JSON.stringify(settingsByGroup[jid]))
     groups = new Set(jids)
     settingsByGroup = settings
+    if (settingsChangeHandler) changed.forEach((jid) => settingsChangeHandler(jid))
   } catch (err) {
     console.error('Could not refresh group list:', err.message)
   }
+}
+
+// Called with a group id whenever that group's settings change. Set from index.js.
+let settingsChangeHandler = null
+export function whenSettingsChange(fn) {
+  settingsChangeHandler = fn
 }
 
 // Called once for a group the bot has never been in before (so it can

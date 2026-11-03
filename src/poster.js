@@ -6,6 +6,7 @@ import { remember, lastHumanMessageAt, inPrayer } from './chatMemory.js'
 import { botApi } from './backend.js'
 import { allowedGroups, allowedGroupsFor, groupSettings, isAllowedGroup, refreshGroups, studyTipOn } from './groups.js'
 import { introFor } from './handler.js'
+import { rememberPost, introSignature } from './cleanup.js'
 import { askNewMonthWish, askFeaturedCaption } from './ai.js'
 import { logActivity } from './activity.js'
 import { quoteCard, coverCard, HANDLE } from './quoteImage.js'
@@ -22,9 +23,11 @@ const PROMO_CHECK_MS = 10 * 60 * 1000
 const WELCOME_BATCH_MS = 60 * 1000
 const MAX_IMAGE_FAILURES = 3
 
+// Returns the sent message, whose key lets cleanup.js delete it later.
 async function send(sock, jid, content, logText) {
-  await sock.sendMessage(jid, content)
+  const sent = await sock.sendMessage(jid, content)
   remember(jid, { text: logText, fromBot: true, kind: 'post' })
+  return sent
 }
 
 // ---------- Admin announcements ----------
@@ -158,7 +161,8 @@ async function maybePostPromo(getSock) {
     const text = texts[index % texts.length]
     const image = images.length ? images[index % images.length] : null
     try {
-      await send(sock, jid, image ? { image: { url: image }, caption: text } : { text }, text)
+      const sent = await send(sock, jid, image ? { image: { url: image }, caption: text } : { text }, text)
+      rememberPost(jid, sent?.key, 'promo', { audience: groupSettings(jid).audience })
       lastPromo[jid] = Date.now()
       console.log(`[promo] Upload advert posted in ${jid}${image ? ` with ${image}` : ''}`)
       logActivity('promo', jid, text.split('\n')[0])
@@ -218,7 +222,8 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
 
   for (const jid of due) {
     try {
-      await send(sock, jid, { text }, text)
+      const sent = await send(sock, jid, { text }, text)
+      rememberPost(jid, sent?.key, 'newMonth')
       if (!test) done[jid] = key
       console.log(`[new-month] ${test ? 'TEST: ' : ''}Posted ${monthName} greeting in ${jid}${selfAware ? ' (with the bot wink)' : ''}`)
       logActivity('new-month', jid, text)
@@ -304,10 +309,15 @@ export async function maybeMorningPost(getSock, { test = false } = {}) {
     try {
       if (cards) {
         // The first card carries the message; the tip card follows the verse card.
-        await send(sock, jid, { image: withVerse ? cards[0] : cards[1], caption: text }, text)
-        if (withVerse && withTip) await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
+        const sent = await send(sock, jid, { image: withVerse ? cards[0] : cards[1], caption: text }, text)
+        rememberPost(jid, sent?.key, 'morning', { verse: withVerse, tip: withTip })
+        if (withVerse && withTip) {
+          const tipCard = await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
+          rememberPost(jid, tipCard?.key, 'tip')
+        }
       } else {
-        await send(sock, jid, { text }, text)
+        const sent = await send(sock, jid, { text }, text)
+        rememberPost(jid, sent?.key, 'morning', { verse: withVerse, tip: withTip })
       }
       if (!test) {
         done[jid] = key
@@ -443,7 +453,8 @@ export async function maybeFeaturedPost(getSock, { test = false } = {}) {
     let sent = 0
     for (const jid of due) {
       try {
-        await send(sock, jid, post.image ? { image: post.image, caption: post.caption } : { text: post.caption }, post.caption)
+        const sent = await send(sock, jid, post.image ? { image: post.image, caption: post.caption } : { text: post.caption }, post.caption)
+        rememberPost(jid, sent?.key, 'featured')
         sent += 1
         if (!test) {
           done[jid] = key
@@ -489,7 +500,8 @@ export function queueWelcome(getSock, groupId, memberIds) {
         : 'Looking for a good book or devotional? Just tag me or ask here, e.g. *Bro Paul, any book on prayer?*'
     const text = `Welcome to the family, ${tags}! 🎉🙏\n\nI'm *${config.botName}* from the RCF Library Department. ${ask}\n\n📚 Library: ${config.siteUrl}\n📤 Share your materials: ${config.siteUrl}/contribute/submit`
     try {
-      await send(sock, groupId, { text, mentions: ids }, text)
+      const sent = await send(sock, groupId, { text, mentions: ids }, text)
+      rememberPost(groupId, sent?.key, 'welcome', { audience: groupSettings(groupId).audience })
       logActivity('welcome', groupId, `Welcomed ${ids.length} new member${ids.length === 1 ? '' : 's'}`)
       await maybeSendSticker(sock, groupId, 'greeting', { chance: 0.5 })
     } catch (err) {
@@ -518,7 +530,8 @@ async function sendOutbox(getSock) {
           // first (it may have just been started), then introduce himself.
           await refreshGroups()
           const intro = introFor(item.group_jid)
-          await send(sock, item.group_jid, { text: intro }, intro)
+          const sent = await send(sock, item.group_jid, { text: intro }, intro)
+          rememberPost(item.group_jid, sent?.key, 'intro', { signature: introSignature(item.group_jid) })
           await botApi(`/outbox/${item.id}`, { method: 'POST', body: { status: 'sent' } })
           logActivity('intro', item.group_jid, 'Introduced himself (from the admin app)')
           await maybeSendSticker(sock, item.group_jid, 'greeting', { chance: 0.5 })
