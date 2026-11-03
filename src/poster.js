@@ -4,7 +4,8 @@ import { config, isActiveHours } from './config.js'
 import { getState, setState } from './state.js'
 import { remember, lastHumanMessageAt, inPrayer } from './chatMemory.js'
 import { botApi } from './backend.js'
-import { allowedGroups, allowedGroupsFor, groupSettings, isAllowedGroup } from './groups.js'
+import { allowedGroups, allowedGroupsFor, groupSettings, isAllowedGroup, refreshGroups } from './groups.js'
+import { introFor } from './handler.js'
 import { askNewMonthWish, askFeaturedCaption } from './ai.js'
 import { logActivity } from './activity.js'
 import { quoteCard, coverCard, HANDLE } from './quoteImage.js'
@@ -23,7 +24,7 @@ const MAX_IMAGE_FAILURES = 3
 
 async function send(sock, jid, content, logText) {
   await sock.sendMessage(jid, content)
-  remember(jid, { text: logText, fromBot: true })
+  remember(jid, { text: logText, fromBot: true, kind: 'post' })
 }
 
 // ---------- Admin announcements ----------
@@ -195,7 +196,8 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
 
   // About one month in three gets a light "I'm a bot, but..." wink. Every
   // month would get old fast; never would feel a bit robotic.
-  const selfAware = Math.random() < 0.34
+  // Never in a group where he isn't presented as an AI.
+  const selfAware = Math.random() < 0.34 && due.every((jid) => groupSettings(jid).revealAi)
   let text
   try {
     text = await askNewMonthWish({ monthName, selfAware })
@@ -496,6 +498,17 @@ async function sendOutbox(getSock) {
     const { items = [] } = await botApi('/outbox')
     for (const item of items) {
       try {
+        if (item.kind === 'intro') {
+          // "Introduce" in the admin app: fetch the group's latest settings
+          // first (it may have just been started), then introduce himself.
+          await refreshGroups()
+          const intro = introFor(item.group_jid)
+          await send(sock, item.group_jid, { text: intro }, intro)
+          await botApi(`/outbox/${item.id}`, { method: 'POST', body: { status: 'sent' } })
+          logActivity('intro', item.group_jid, 'Introduced himself (from the admin app)')
+          await maybeSendSticker(sock, item.group_jid, 'greeting', { chance: 0.5 })
+          continue
+        }
         await send(sock, item.group_jid, { text: item.text }, item.text)
         await botApi(`/outbox/${item.id}`, { method: 'POST', body: { status: 'sent' } })
         logActivity('send', item.group_jid, `Admin message: ${item.text}`)

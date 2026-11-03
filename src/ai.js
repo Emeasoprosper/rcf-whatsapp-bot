@@ -72,6 +72,13 @@ This group has MOUAU students and people who aren't students. Don't bring up pas
 This group is NOT a student group. Never mention past questions, lecture notes, handouts, courses or exams. When the library comes up, talk about books, devotionals, sermons and resources for anyone doing research or growing in life and faith. If someone asks for past questions or lecture notes, reply with ONLY: SEARCH: <their words> and the system answers it.`,
 }
 
+// Groups where the superadmin switched off "Say he's an AI". He doesn't
+// volunteer it, but he never claims to be human: a sincere question gets
+// an honest answer.
+const QUIET_AI_RULE = `
+
+In this group, don't describe yourself as an AI, bot or assistant, and don't make jokes about being a robot; you're simply ${config.botName} from the RCF Library Department. But never claim or pretend to be a human: if someone sincerely asks whether you're a real person or an AI, answer honestly that you're the library's AI helper, in a short, warm way.`
+
 // Added while the group is in the middle of praying together.
 const PRAYER_NOW_RULE = `
 
@@ -125,7 +132,7 @@ async function callGeminiOnce(body) {
 
 // Returns { type: 'reply', text }, { type: 'search', query } or { type: 'contact' }.
 // isPrivate = a one-to-one chat with the bot number instead of a group.
-export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [], isPrivate = false, audience = 'campus', praying = false }) {
+export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [], isPrivate = false, audience = 'campus', praying = false, revealAi = true }) {
   const info = knowledgeEntries.length
     ? knowledgeEntries.map((e) => `- ${e.title}: ${e.text}`).join('\n')
     : '(none provided)'
@@ -139,7 +146,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
         {
           text: isPrivate
             ? SYSTEM_RULES + PRIVATE_RULES + STICKER_RULE
-            : SYSTEM_RULES + (AUDIENCE_RULES[audience] || '') + (praying ? PRAYER_NOW_RULE : STICKER_RULE),
+            : SYSTEM_RULES + (AUDIENCE_RULES[audience] || '') + (revealAi ? '' : QUIET_AI_RULE) + (praying ? PRAYER_NOW_RULE : STICKER_RULE),
         },
       ],
     },
@@ -338,14 +345,14 @@ If you shouldn't jump in, reply with exactly: SKIP
 Otherwise reply with only the message itself. Don't mention that you were "watching" the chat.`
 
 // Returns a message to post, or null to stay quiet.
-export async function askChimeIn({ history = [], knowledgeEntries = [], audience = 'campus' }) {
+export async function askChimeIn({ history = [], knowledgeEntries = [], audience = 'campus', revealAi = true }) {
   const info = knowledgeEntries.length
     ? knowledgeEntries.map((e) => `- ${e.title}: ${e.text}`).join('\n')
     : '(none provided)'
   const chat = history.map((h) => `${clean(h.name, 40)}: ${clean(h.text, 300)}`).join('\n')
 
   const text = await callGemini({
-    systemInstruction: { parts: [{ text: CHIME_RULES + (AUDIENCE_RULES[audience] || '') }] },
+    systemInstruction: { parts: [{ text: CHIME_RULES + (AUDIENCE_RULES[audience] || '') + (revealAi ? '' : QUIET_AI_RULE) }] },
     contents: [
       { role: 'user', parts: [{ text: `<approved_info>\n${info}\n</approved_info>\n<recent_chat>\n${chat}\n</recent_chat>` }] },
     ],

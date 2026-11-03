@@ -24,6 +24,7 @@ function apply(settings = {}) {
   set('privateChats', settings.privateChats)
   set('morningPost', settings.morningPost)
   set('featuredPost', settings.featuredPost)
+  set('saveChats', settings.saveChats)
   set('stickers', settings.stickers)
   set('promoEveryHours', settings.promoEveryHours)
   set('activeFromHour', settings.activeFromHour)

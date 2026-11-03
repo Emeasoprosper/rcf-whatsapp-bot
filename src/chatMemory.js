@@ -1,5 +1,6 @@
 import { config } from './config.js'
 import { isPrayerLike, isBirthdayWish } from './reactions.js'
+import { logChat } from './chatLog.js'
 
 // Last few messages per group, in memory only, so the AI can follow the
 // conversation. Nothing here is saved to disk.
@@ -12,8 +13,11 @@ const prayerMarks = new Map() // groupId -> [{ name, at }] of recent prayer-like
 const PRAYER_WINDOW_MS = 10 * 60 * 1000
 const PRAYER_TAIL_MS = 15 * 60 * 1000
 
-export function remember(groupId, { name, text, fromBot = false }) {
+// Everything Bro Paul says is also saved to the chat log (admin Chats tab);
+// members' messages are saved by the caller only when they're for him.
+export function remember(groupId, { name, text, fromBot = false, kind = 'text' }) {
   if (!groupId || !text) return
+  if (fromBot) logChat({ chatJid: groupId, fromBot: true, kind, text })
   const list = groups.get(groupId) || []
   list.push({ name: fromBot ? config.botName : name || 'Member', text: text.slice(0, 400), fromBot, at: Date.now() })
   if (list.length > config.chatMemorySize) list.shift()

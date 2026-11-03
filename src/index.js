@@ -5,7 +5,8 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { config } from './config.js'
-import { handleMessage, handlePrivateMessage, maybeChimeIn, maybePrayAlong, REACT_MARKER, takeAiCall, newGroupIntro } from './handler.js'
+import { handleMessage, handlePrivateMessage, maybeChimeIn, maybePrayAlong, REACT_MARKER, takeAiCall } from './handler.js'
+import { logChat, startChatLog } from './chatLog.js'
 import { transcribeVoice } from './ai.js'
 import { remember, recentChat, inPrayer } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
@@ -194,6 +195,7 @@ async function onPrivateMessage(sock, m, jid) {
   const senderName = m.pushName || ''
   const history = recentChat(jid)
   remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
+  logChat({ chatJid: jid, chatName: senderName, senderName, kind: isVoice ? 'voice' : 'text', text })
 
   if (isThanksOnly(text)) {
     // Now and then a "thank you" sticker instead of the heart.
@@ -354,6 +356,9 @@ async function onMessage(sock, m) {
     history,
   })
 
+  // A message Bro Paul answers goes to the chat log, just before his reply.
+  if (raw && !fromMe) logChat({ chatJid: jid, senderName, kind: isVoice ? 'voice' : 'text', text })
+
   if (raw && REACT_MARKER.test(raw)) {
     // The AI couldn't answer a casual message: react like a person instead.
     const emoji = REACT_MARKER.exec(raw)[1]
@@ -470,23 +475,9 @@ async function start() {
   })
 }
 
-// Added to a brand-new group: say hello once, after a short pause so it
-// doesn't land in the same second as "Bro Paul was added".
-whenNewGroup((jid) => {
-  setTimeout(async () => {
-    const sock = currentSock
-    if (!sock) return
-    const text = newGroupIntro()
-    try {
-      await sock.sendMessage(jid, { text })
-      remember(jid, { text, fromBot: true })
-      logActivity('intro', jid, 'Introduced himself in a new group')
-      await maybeSendSticker(sock, jid, 'greeting', { chance: 0.6 })
-    } catch (err) {
-      console.error('New group intro failed:', err.message)
-    }
-  }, 8000)
-})
+// A brand-new group waits silently under "New groups" in the admin app until
+// a superadmin clicks Introduce or Start quietly (see poster.js sendOutbox).
+whenNewGroup((jid) => console.log(`[groups] Waiting in ${jid} until a superadmin introduces or starts Bro Paul there.`))
 
 startHeartbeat(async () => {
   console.log('A superadmin asked to link a different number. Logging out...')
@@ -515,4 +506,5 @@ await initState()
 await initStickers()
 await startLiveSettings()
 startActivityLog()
+startChatLog()
 start()

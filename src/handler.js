@@ -144,7 +144,7 @@ async function creatorAnswer(text, senderId, context) {
 // A real business enquiry: a deal, partnership, advert, sponsorship or a job,
 // aimed at the bot, its owner or the library. Both parts are needed, so
 // "big deal" or "my business class" in normal chat doesn't trigger it.
-const BUSINESS_WORDS = /\b((make|strike|close|discuss|do|have)\s+(a\s+)?deal|deal\s+with|business|partner(ship)?|collaborat\w*|sponsor\w*|advertis\w*|adverts?|promote\s+(my|our)|hire|work\s+with|invest\w*|proposal|contract|website|web\s*app|mobile\s+app|(a|my|our)\s+bot)\b/i
+const BUSINESS_WORDS = /\b((make|strike|close|discuss|do|have)\s+(a\s+)?deal|deal\s+with|business|partner(ship)?|collaborat\w*|sponsor\w*|advertis\w*|adverts?|promote\s+(my|our)|hire|work\s+with|invest\w*|proposal|contract|website|web\s*app|mobile\s+app|(build|make|create|develop|design|need|want)\s+(me\s+|us\s+)?(a|my|our)\s+(whatsapp\s+)?bot)\b/i
 const BUSINESS_TARGET = /\b(you|your|owner|boss|developer|creator|admin|team|library|whoever|person\s+behind)\b/i
 const CONTACT_OWNER = /\b(contact|reach|talk\s+to|speak\s+(to|with)|meet|number\s+of)\s+(the\s+|your\s+)?(owner|boss|developer|creator|admin|team|management|person\s+behind)\b/i
 
@@ -176,22 +176,38 @@ function dmInviteReply() {
 
 const INTRO_WORDS = /\b(introduc(e|ing)|meet|welcome|who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)|new\s+(library\s+)?(dept|department)\s+member)\b/i
 const BOT_NAME = /\bbro\s*paul\b/i
+// The full introduction at most every 2 hours per group.
 const INTRO_COOLDOWN_MS = 2 * 60 * 60 * 1000
-let lastIntroAt = 0
+const lastIntroAt = new Map()
 
-function introReply(audience = 'campus') {
-  const find =
-    audience === 'campus'
-      ? '📚 Find books, notes, past questions and audio in our digital library. Just ask, e.g. *anybody have GST 101 past questions?*\n❓ Answer study questions and chat when you tag me or reply to my message'
-      : '📚 Find Christian books, devotionals, sermons and research resources in our digital library. Just ask, e.g. *any book on prayer?*\n❓ Answer questions and chat when you tag me or reply to my message'
-  return `Hello everyone! 👋 I'm *${config.botName}*, an AI assistant and the newest member of the RCF MOUAU Library Department. I work alongside our ${config.libraryHod}, and I'm so happy to serve the happiest people around! 😄\n\nHere's what I can do:\n${find}\n📢 Share library announcements and updates here\n\nOur library: ${config.siteUrl}\nGot materials? Upload them: ${config.siteUrl}/contribute/submit`
-}
-
-// Posted once when the bot is added to a group it has never been in. The
-// group's type isn't set yet, so it fits any group, and like every intro it
-// doesn't bring up who made the bot (that's only for when someone asks).
-export function newGroupIntro() {
-  return `Hello everyone! 👋 I'm *${config.botName}*, the AI assistant from the RCF MOUAU Library Department. Thank you for having me here 😄\n\nHere's how I can help:\n📚 Find Christian books, devotionals, sermons and study materials in our free digital library. Just tag me and ask, e.g. *Bro Paul, any book on prayer?*\n❓ Answer questions and chat when you tag me or reply to one of my messages\n📢 Share library updates here now and then\n\n🌐 Library: ${config.siteUrl}`
+// Bro Paul's introduction, written from the group's settings: who it's for
+// (past questions only in campus groups), whether he presents himself as an
+// AI, and only the posts switched on there. Used when someone asks "who are
+// you" / "introduce yourself" and when a superadmin clicks Introduce in the
+// admin app. It never brings up who made him. groupId null = private chat.
+export function introFor(groupId) {
+  const s = groupSettings(groupId)
+  const inGroup = Boolean(groupId)
+  const who = s.revealAi
+    ? `I'm *${config.botName}*, the AI assistant of the RCF MOUAU Library Department`
+    : `I'm *${config.botName}* from the RCF MOUAU Library Department`
+  const ask = inGroup ? 'Just tag me and ask' : 'Just ask me here'
+  const lines = [
+    s.audience === 'campus'
+      ? `📚 Find books, lecture notes, past questions and audio in our free digital library. ${ask}, e.g. *GST 101 past questions*`
+      : s.audience === 'mixed'
+        ? `📚 Find Christian books, devotionals, sermons and study materials in our free digital library. ${ask}, e.g. *any book on prayer?*`
+        : `📚 Find Christian books, devotionals, sermons and resources for research in our free digital library. ${ask}, e.g. *any book on prayer?*`,
+    inGroup ? '❓ Answer questions and chat when you tag me or reply to one of my messages' : '❓ Answer your questions and chat with you anytime',
+  ]
+  if (inGroup) {
+    if (s.bookOfDay) lines.push('📖 Share a *Book of the day* at noon')
+    if (s.morningPost) lines.push(s.audience === 'general' ? '☀️ Bring a verse of the day every morning' : '☀️ Bring a verse and study tip every morning')
+    if (s.prayer === 'join') lines.push('🙏 Join you in prayer when the group prays')
+    if (s.birthdays) lines.push('🎂 Celebrate birthdays with you')
+    lines.push('📢 Share library updates now and then')
+  }
+  return `Hello${inGroup ? ' everyone' : ''}! 👋 ${who}. I work alongside our ${config.libraryHod}, and I'm happy to be here with you 😄\n\nHere's how I can help:\n${lines.join('\n')}\n\n🌐 Library: ${config.siteUrl}`
 }
 
 // Past questions, lecture notes and other course materials, as opposed to
@@ -403,11 +419,11 @@ function humanFallback(text, { tired = false } = {}) {
   return tired ? `${pickLine(TIRED_LINES)}${config.siteUrl}` : pickLine(BUSY_LINES)
 }
 
-async function aiReply(text, { senderName, senderId = '', history, isPrivate = false, audience = 'campus', praying = false }) {
+async function aiReply(text, { senderName, senderId = '', history, isPrivate = false, audience = 'campus', praying = false, revealAi = true }) {
   if (!aiAllowed()) return humanFallback(text, { tired: true })
   aiCount += 1
   try {
-    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience, praying })
+    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience, praying, revealAi })
     // The AI decided the member is asking for a material: look it up for real.
     if (result.type === 'search') return await resourceReply(result.query, senderId, audience)
     // Business or a request for the owner: the direct contact in DM (the AI
@@ -442,7 +458,7 @@ export async function maybeChimeIn(groupId) {
   lastChimeAt.set(groupId, now)
   try {
     aiCount += 1
-    const text = await askChimeIn({ history: recentChat(groupId), knowledgeEntries: allKnowledge(), audience: groupSettings(groupId).audience })
+    const text = await askChimeIn({ history: recentChat(groupId), knowledgeEntries: allKnowledge(), audience: groupSettings(groupId).audience, revealAi: groupSettings(groupId).revealAi })
     return text ? text.slice(0, 1200) : null
   } catch (err) {
     console.error('Chime-in failed:', err.message)
@@ -477,7 +493,7 @@ export async function handlePrivateMessage(msg) {
   if (acceptedContactOffer(msg.senderId, text)) return contactReply()
   const aboutCreator = await creatorAnswer(text, msg.senderId, { senderName: msg.senderName, history: msg.history || [], isPrivate: true })
   if (aboutCreator) return aboutCreator.slice(0, 1800)
-  if (INTRO_WORDS.test(text) && /who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)/i.test(text)) return introReply()
+  if (INTRO_WORDS.test(text) && /who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)/i.test(text)) return introFor(null)
 
   // Answer to a course list Bro Paul just sent ("first 3", "2", "MTH 222").
   const picked = answerMenu(msg.senderId, text)
@@ -506,7 +522,7 @@ export async function handleMessage(msg) {
 
   const text = msg.text.trim()
   if (!text) return null
-  const { audience } = groupSettings(msg.groupId)
+  const { audience, revealAi } = groupSettings(msg.groupId)
   // While the group prays, Bro Paul only speaks when someone talks to him.
   const praying = inPrayer(msg.groupId)
 
@@ -537,9 +553,9 @@ export async function handleMessage(msg) {
   const nameIntro = config.botMode !== 'tag_only' && introWords && BOT_NAME.test(text)
   if ((tagged && introWords) || nameIntro) {
     const introNow = Date.now()
-    if (introNow - lastIntroAt >= INTRO_COOLDOWN_MS) {
-      lastIntroAt = introNow
-      return introReply(audience)
+    if (introNow - (lastIntroAt.get(msg.groupId) || 0) >= INTRO_COOLDOWN_MS) {
+      lastIntroAt.set(msg.groupId, introNow)
+      return introFor(msg.groupId)
     }
     if (!tagged) return null
   }
@@ -566,7 +582,7 @@ export async function handleMessage(msg) {
         : isRequest
           ? await resourceReply(text, msg.senderId, audience)
           : tagged
-            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], audience, praying })
+            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], audience, praying, revealAi })
             : null
   if (!reply) return null
 
