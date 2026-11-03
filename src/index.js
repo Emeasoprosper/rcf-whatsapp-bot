@@ -11,7 +11,7 @@ import { transcribeVoice } from './ai.js'
 import { remember, recentChat, inPrayer } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
-import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup, whenSettingsChange } from './groups.js'
+import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup, whenSettingsChange, markLeft } from './groups.js'
 import { rememberPost, introSignature, cleanUpGroup } from './cleanup.js'
 import { setStatus, startHeartbeat, currentStatus } from './status.js'
 import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact, isPrayerLike } from './reactions.js'
@@ -485,11 +485,19 @@ async function start() {
   })
 
   sock.ev.on('group-participants.update', ({ id, participants = [], action }) => {
-    if (action !== 'add') return
     // Newer Baileys versions send objects instead of plain ids.
     const ids = participants.map((p) => (typeof p === 'string' ? p : p?.id)).filter(Boolean)
     const mine = botIds(sock)
-    if (ids.some((j) => mine.includes(bareId(j)))) reportGroup(sock, id)
+    // Any form of his id (phone number or WhatsApp's @lid id) counts as him.
+    const isMe = (p) =>
+      [typeof p === 'string' ? p : p?.id, p?.lid, p?.phoneNumber].filter(Boolean).some((j) => mine.includes(bareId(j)))
+    if ((action === 'remove' || action === 'leave') && participants.some(isMe)) {
+      logActivity('left', id, 'Removed from the group: switched off there')
+      markLeft(id)
+      return
+    }
+    if (action !== 'add') return
+    if (participants.some(isMe)) reportGroup(sock, id)
     const newcomers = ids.filter((j) => !mine.includes(bareId(j)))
     if (newcomers.length) queueWelcome(() => currentSock, id, newcomers)
   })

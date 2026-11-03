@@ -98,18 +98,35 @@ export async function reportGroup(sock, jid, meta = null) {
       console.log(`[groups] "${info.subject || jid}" is a Community (parent), not a chat: skipped. Its groups are handled on their own.`)
       return
     }
-    const { enabled, isNew } = await botApi('/groups', {
+    const { enabled, isNew, rejoined } = await botApi('/groups', {
       method: 'POST',
       body: { jid, name: info?.subject || null, memberCount: info?.participants?.length ?? null },
     })
     if (enabled) groups.add(jid)
     else groups.delete(jid)
-    if (isNew) console.log(`[groups] New group "${info?.subject || jid}" registered${enabled ? ' and switched on' : ''}`)
-    if (isNew && enabled && newGroupHandler) newGroupHandler(jid)
+    if (isNew || rejoined) {
+      console.log(`[groups] ${rejoined ? 'Added back to' : 'New group'} "${info?.subject || jid}": waiting silently until a superadmin starts him there.`)
+      if (newGroupHandler) newGroupHandler(jid)
+    }
   } catch (err) {
     // Try again in 10 minutes, not on every message (backend may be asleep).
     setTimeout(() => reported.delete(jid), 10 * 60 * 1000)
     console.error(`Could not report group ${jid}:`, err.message)
+  }
+}
+
+// He was removed from a group (or left it): stop talking there at once and
+// tell the backend, which switches it off and lists it under "Removed from".
+// If he's added back, the group is reported again and waits as a new group.
+export async function markLeft(jid) {
+  groups.delete(jid)
+  reported.delete(jid)
+  if (!backendOn()) return
+  try {
+    await botApi('/groups/left', { method: 'POST', body: { jid } })
+    console.log(`[groups] Removed from ${jid}: switched off there.`)
+  } catch (err) {
+    console.error(`Could not report leaving ${jid}:`, err.message)
   }
 }
 
@@ -118,6 +135,15 @@ export async function reportAllGroups(sock) {
   try {
     const all = await sock.groupFetchAllParticipating()
     for (const [jid, meta] of Object.entries(all)) await reportGroup(sock, jid, meta)
+    // Groups he was removed from while offline get marked too.
+    const current = Object.keys(all).filter((jid) => !communityParents.has(jid))
+    if (current.length) {
+      const { marked = 0 } = await botApi('/groups/sync', { method: 'POST', body: { jids: current } })
+      if (marked) {
+        console.log(`[groups] ${marked} group(s) he was removed from while offline are now switched off.`)
+        await refreshGroups()
+      }
+    }
   } catch (err) {
     console.error('Could not list groups:', err.message)
   }
