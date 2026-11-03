@@ -13,6 +13,13 @@ const GOOD_NEWS = /\b(testimony|i passed|we passed|i made (an? )?[ab]\b|first cl
 
 export const BIRTHDAY = /\b(happy\s*(birth\s*day|b'?day|bday|new\s*age)|hbd|many\s+happy\s+returns|happy\s+(earth\s*day|celebration))\b/i
 
+// Prayer: the wording people use while praying together in the group.
+const PRAYER = /\b(in\s+jesus'?\s*(mighty\s+|precious\s+)?name|in\s+the\s+name\s+of\s+jesus|ijn|amen+|father\s+(lord|god|we|i|in)|lord\s+(we|i)\s+(pray|thank|ask|come)|we\s+(pray|decree|declare|cover|plead)|i\s+(decree|declare)|let\s+us\s+pray|let'?s\s+pray|prayer\s+(points?|session|time|meeting)|by\s+the\s+blood\s+of\s+jesus|holy\s+spirit|abba\s+father|hallelujah|thank\s+you\s+(lord|jesus|father))\b/i
+
+export function isPrayerLike(text) {
+  return PRAYER.test(text)
+}
+
 export function isThanksOnly(text) {
   return text.length <= 60 && THANKS_ONLY.test(text.trim())
 }

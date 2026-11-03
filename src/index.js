@@ -5,14 +5,14 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { config } from './config.js'
-import { handleMessage, handlePrivateMessage, maybeChimeIn, REACT_MARKER, takeAiCall, newGroupIntro } from './handler.js'
+import { handleMessage, handlePrivateMessage, maybeChimeIn, maybePrayAlong, REACT_MARKER, takeAiCall, newGroupIntro } from './handler.js'
 import { transcribeVoice } from './ai.js'
-import { remember, recentChat } from './chatMemory.js'
+import { remember, recentChat, inPrayer } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
 import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup } from './groups.js'
 import { setStatus, startHeartbeat, currentStatus } from './status.js'
-import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact } from './reactions.js'
+import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact, isPrayerLike } from './reactions.js'
 import { initStickers, learnSticker, forgetLastSticker, relabelLastSticker, stickerSummary, maybeSendSticker, splitStickerTag, MOODS } from './stickers.js'
 import { handleBirthdayWish } from './birthday.js'
 import { initState } from './state.js'
@@ -23,6 +23,10 @@ const QR_FILE = 'qr.png'
 const GROUP_REFRESH_MS = 60 * 1000
 
 const announcedGroups = new Set()
+// 🙏 on prayers during a session, at most this often per group, so it reads
+// as joining in rather than a reaction on every line.
+const PRAYER_REACT_GAP_MS = 30 * 1000
+const lastPrayerReact = new Map()
 let currentSock = null
 
 const bareId = (jid) => String(jid || '').split('@')[0].split(':')[0]
@@ -291,6 +295,26 @@ async function onMessage(sock, m) {
   const history = recentChat(jid)
   if (!fromMe) remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
 
+  // Prayer session: no banter. Depending on the group's setting, 🙏 the
+  // prayers and now and then add a short prayer. Talking to Bro Paul
+  // directly still gets an answer (a reverent one, see handler.js).
+  if (!fromMe && !mentionedBot && !repliedToBot && inPrayer(jid) && isPrayerLike(text) && !isBirthdayWish(text)) {
+    const mode = groupSettings(jid).prayer
+    if (mode !== 'quiet' && config.reactions && Date.now() - (lastPrayerReact.get(jid) || 0) > PRAYER_REACT_GAP_MS) {
+      lastPrayerReact.set(jid, Date.now())
+      await sock.sendMessage(jid, { react: { text: '🙏', key: m.key } }).catch(() => {})
+    }
+    if (mode === 'join') {
+      const prayer = await maybePrayAlong(jid)
+      if (prayer && currentSock) {
+        await currentSock.sendMessage(jid, { text: prayer })
+        remember(jid, { text: prayer, fromBot: true })
+        logActivity('prayer', jid, prayer)
+      }
+    }
+    return
+  }
+
   if (!fromMe && (mentionedBot || repliedToBot) && isThanksOnly(text)) {
     // "thanks Bro Paul" gets a heart (or now and then a thank-you sticker), not a speech.
     if (!(await maybeSendSticker(sock, jid, 'thanks', { chance: 0.35 }))) await react()
@@ -347,7 +371,7 @@ async function onMessage(sock, m) {
       const kind = /^Here's what I found|^I couldn't find/.test(reply) ? 'search' : 'reply'
       logActivity(kind, jid, `${senderName || 'Member'}: "${text.slice(0, 80)}" → ${reply.slice(0, 120)}`)
     }
-    if (sticker) await maybeSendSticker(sock, jid, sticker)
+    if (sticker && !inPrayer(jid)) await maybeSendSticker(sock, jid, sticker)
     return
   }
 

@@ -1,9 +1,16 @@
 import { config } from './config.js'
+import { isPrayerLike, isBirthdayWish } from './reactions.js'
 
 // Last few messages per group, in memory only, so the AI can follow the
 // conversation. Nothing here is saved to disk.
 const groups = new Map()
 const lastHumanAt = new Map()
+const prayerMarks = new Map() // groupId -> [{ name, at }] of recent prayer-like messages
+
+// A prayer session: at least 3 prayer-like messages from 2+ people within
+// 10 minutes. It's treated as still going until 15 minutes after the last one.
+const PRAYER_WINDOW_MS = 10 * 60 * 1000
+const PRAYER_TAIL_MS = 15 * 60 * 1000
 
 export function remember(groupId, { name, text, fromBot = false }) {
   if (!groupId || !text) return
@@ -12,6 +19,24 @@ export function remember(groupId, { name, text, fromBot = false }) {
   if (list.length > config.chatMemorySize) list.shift()
   groups.set(groupId, list)
   if (!fromBot) lastHumanAt.set(groupId, Date.now())
+  // Birthday wishes ("more grace IJN", "Amen") aren't a prayer session.
+  if (!fromBot && isPrayerLike(text) && !isBirthdayWish(text)) {
+    const marks = (prayerMarks.get(groupId) || []).filter((m) => Date.now() - m.at < PRAYER_TAIL_MS + PRAYER_WINDOW_MS)
+    marks.push({ name: name || 'Member', at: Date.now() })
+    prayerMarks.set(groupId, marks.slice(-50))
+  }
+}
+
+// True while the group is praying together.
+export function inPrayer(groupId) {
+  const marks = prayerMarks.get(groupId) || []
+  if (marks.length === 0 || Date.now() - marks[marks.length - 1].at > PRAYER_TAIL_MS) return false
+  // Any 10-minute stretch with 3+ prayer messages from 2+ people.
+  for (let i = 0; i < marks.length; i++) {
+    const burst = marks.filter((m) => m.at >= marks[i].at && m.at - marks[i].at <= PRAYER_WINDOW_MS)
+    if (burst.length >= 3 && new Set(burst.map((m) => m.name)).size >= 2) return true
+  }
+  return false
 }
 
 export function recentChat(groupId) {

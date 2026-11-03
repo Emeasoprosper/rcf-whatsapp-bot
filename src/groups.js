@@ -14,8 +14,11 @@ const reported = new Set()
 
 // Set per group on the admin app's WhatsApp Bot page.
 // audience: 'campus' (MOUAU students), 'mixed' or 'general' (not students).
+// prayer: during a prayer session, 'quiet' (say nothing), 'amen' (🙏 the
+// prayers) or 'join' (also add a short prayer now and then).
 const DEFAULT_GROUP_SETTINGS = {
   audience: 'campus',
+  prayer: 'amen',
   bookOfDay: true,
   morningPost: true,
   promos: true,
@@ -30,8 +33,10 @@ export function groupSettings(jid) {
 }
 
 // The groups where a kind of post is switched on, e.g. allowedGroupsFor('bookOfDay').
-export function allowedGroupsFor(key) {
-  return allowedGroups().filter((jid) => groupSettings(jid)[key] !== false)
+// notNow = groups to hold the post back from for the moment (e.g. praying);
+// the poster tries them again on its next check.
+export function allowedGroupsFor(key, notNow = () => false) {
+  return allowedGroups().filter((jid) => groupSettings(jid)[key] !== false && !notNow(jid))
 }
 
 export function isAllowedGroup(jid) {

@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { config, isActiveHours } from './config.js'
 import { searchLibrary } from './library.js'
-import { askAi, askChimeIn } from './ai.js'
-import { activity, recentChat } from './chatMemory.js'
+import { askAi, askChimeIn, askPrayer } from './ai.js'
+import { activity, recentChat, inPrayer } from './chatMemory.js'
 import { liveFacts } from './liveSettings.js'
 import { groupSettings } from './groups.js'
 import { parseLevelRequest, levelLabel, findCoursesAtLevel, formatItems, courseMenu, rememberMenu, hasPendingMenu, answerMenu } from './levelSearch.js'
@@ -242,6 +242,28 @@ function aiAllowed() {
   return aiCount < config.dailyAiLimit
 }
 
+// Pray-along groups: Bro Paul adds his own short prayer during a session,
+// at most every 12 minutes per group and only after a few people have
+// prayed since he last did, so he joins in rather than leads.
+const PRAYER_GAP_MS = 12 * 60 * 1000
+const prayerState = new Map() // groupId -> { lastAt, since }
+
+export async function maybePrayAlong(groupId) {
+  const state = prayerState.get(groupId) || { lastAt: 0, since: 0 }
+  state.since += 1
+  prayerState.set(groupId, state)
+  if (state.since < 4 || Date.now() - state.lastAt < PRAYER_GAP_MS) return null
+  if (!takeAiCall()) return null
+  state.lastAt = Date.now()
+  state.since = 0
+  try {
+    return await askPrayer({ history: recentChat(groupId) })
+  } catch (err) {
+    console.error('Prayer reply failed:', err.message)
+    return null
+  }
+}
+
 // Listening to a voice note is an AI call too, so it counts toward today's limit.
 export function takeAiCall() {
   if (!config.geminiApiKey || !aiAllowed()) return false
@@ -381,11 +403,11 @@ function humanFallback(text, { tired = false } = {}) {
   return tired ? `${pickLine(TIRED_LINES)}${config.siteUrl}` : pickLine(BUSY_LINES)
 }
 
-async function aiReply(text, { senderName, senderId = '', history, isPrivate = false, audience = 'campus' }) {
+async function aiReply(text, { senderName, senderId = '', history, isPrivate = false, audience = 'campus', praying = false }) {
   if (!aiAllowed()) return humanFallback(text, { tired: true })
   aiCount += 1
   try {
-    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience })
+    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience, praying })
     // The AI decided the member is asking for a material: look it up for real.
     if (result.type === 'search') return await resourceReply(result.query, senderId, audience)
     // Business or a request for the owner: the direct contact in DM (the AI
@@ -405,7 +427,7 @@ const chimeBusy = new Set()
 // when the group is in a lively discussion and the AI decides it can add
 // something useful, otherwise null.
 export async function maybeChimeIn(groupId) {
-  if (!config.chimeIn || !isActiveHours() || chimeBusy.has(groupId) || !groupSettings(groupId).chimeIn) return null
+  if (!config.chimeIn || !isActiveHours() || chimeBusy.has(groupId) || !groupSettings(groupId).chimeIn || inPrayer(groupId)) return null
   const now = Date.now()
   if (now - (lastChimeAt.get(groupId) || 0) < config.chimeCooldownMs) return null
 
@@ -485,6 +507,8 @@ export async function handleMessage(msg) {
   const text = msg.text.trim()
   if (!text) return null
   const { audience } = groupSettings(msg.groupId)
+  // While the group prays, Bro Paul only speaks when someone talks to him.
+  const praying = inPrayer(msg.groupId)
 
   // "Tagged" = the member is talking to the bot: @mention, a reply to one of
   // its messages, or starting the message with its name.
@@ -525,7 +549,7 @@ export async function handleMessage(msg) {
   if (tagged) {
     if (now - (senderLastTagged.get(msg.senderId) || 0) < 10000) return null
   } else {
-    if (config.botMode === 'tag_only' || !isRequest || text.length > 300) return null
+    if (praying || config.botMode === 'tag_only' || !isRequest || text.length > 300) return null
     if (now - lastUntaggedReplyAt < config.groupCooldownMs) return null
     if (now - (senderLastReply.get(msg.senderId) || 0) < config.senderCooldownMs) return null
   }
@@ -542,7 +566,7 @@ export async function handleMessage(msg) {
         : isRequest
           ? await resourceReply(text, msg.senderId, audience)
           : tagged
-            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], audience })
+            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], audience, praying })
             : null
   if (!reply) return null
 

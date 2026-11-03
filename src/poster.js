@@ -2,7 +2,7 @@ import { readdirSync } from 'node:fs'
 import path from 'node:path'
 import { config, isActiveHours } from './config.js'
 import { getState, setState } from './state.js'
-import { remember, lastHumanMessageAt } from './chatMemory.js'
+import { remember, lastHumanMessageAt, inPrayer } from './chatMemory.js'
 import { botApi } from './backend.js'
 import { allowedGroups, allowedGroupsFor, groupSettings, isAllowedGroup } from './groups.js'
 import { askNewMonthWish, askFeaturedCaption } from './ai.js'
@@ -136,7 +136,7 @@ async function maybePostPromo(getSock) {
   const images = promoImages()
   let index = getState('promoIndex', 0)
 
-  for (const jid of allowedGroupsFor('promos')) {
+  for (const jid of allowedGroupsFor('promos', inPrayer)) {
     const last = lastPromo[jid] || 0
     if (Date.now() - last < intervalMs) continue
     // Only advertise in a group that's been active since the last advert,
@@ -187,7 +187,7 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
 
   const key = `${year}-${monthName}`
   const done = getState('newMonthPosted', {})
-  const due = test ? config.allowedGroups : allowedGroupsFor('newMonth').filter((jid) => done[jid] !== key)
+  const due = test ? config.allowedGroups : allowedGroupsFor('newMonth', inPrayer).filter((jid) => done[jid] !== key)
   if (due.length === 0) {
     if (test) console.log('[new-month] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
     return
@@ -255,7 +255,7 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
 
   const key = `${year}-${monthName}-${day}`
   const done = getState('morningPosted', {})
-  const due = test ? config.allowedGroups : allowedGroupsFor('morningPost').filter((jid) => done[jid] !== key)
+  const due = test ? config.allowedGroups : allowedGroupsFor('morningPost', inPrayer).filter((jid) => done[jid] !== key)
   if (due.length === 0) {
     if (test) console.log('[morning] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
     return
@@ -401,7 +401,7 @@ export async function maybeFeaturedPost(getSock, { test = false } = {}) {
   if (!test && (hour >= FEATURED_UNTIL_HOUR || minutesToGo > FEATURED_PREP_MINUTES)) return
 
   const done = getState('featuredPosted', {})
-  const due = test ? config.allowedGroups : allowedGroupsFor('bookOfDay').filter((jid) => done[jid] !== key)
+  const due = test ? config.allowedGroups : allowedGroupsFor('bookOfDay', inPrayer).filter((jid) => done[jid] !== key)
   if (due.length === 0) {
     if (test) console.log('[featured] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
     return
