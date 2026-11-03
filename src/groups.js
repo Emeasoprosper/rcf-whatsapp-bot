@@ -32,6 +32,13 @@ export function groupSettings(jid) {
   return { ...DEFAULT_GROUP_SETTINGS, ...(settingsByGroup[jid] || {}) }
 }
 
+// The study tip is its own switch, separate from the verse of the day
+// (morningPost). Not set yet: on for student groups, off for 'general' ones.
+export function studyTipOn(jid) {
+  const s = groupSettings(jid)
+  return typeof s.studyTip === 'boolean' ? s.studyTip : s.audience !== 'general'
+}
+
 // The groups where a kind of post is switched on, e.g. allowedGroupsFor('bookOfDay').
 // notNow = groups to hold the post back from for the moment (e.g. praying);
 // the poster tries them again on its next check.

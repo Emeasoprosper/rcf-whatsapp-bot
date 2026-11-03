@@ -4,7 +4,7 @@ import { config, isActiveHours } from './config.js'
 import { getState, setState } from './state.js'
 import { remember, lastHumanMessageAt, inPrayer } from './chatMemory.js'
 import { botApi } from './backend.js'
-import { allowedGroups, allowedGroupsFor, groupSettings, isAllowedGroup, refreshGroups } from './groups.js'
+import { allowedGroups, allowedGroupsFor, groupSettings, isAllowedGroup, refreshGroups, studyTipOn } from './groups.js'
 import { introFor } from './handler.js'
 import { askNewMonthWish, askFeaturedCaption } from './ai.js'
 import { logActivity } from './activity.js'
@@ -226,8 +226,9 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
 const MORNING_FROM_HOUR = 7
 const MORNING_UNTIL_HOUR = 12
 
-// A 'general' (not students) group gets the verse without the study tip.
-function morningMessage({ verse, tip }, audience = 'campus') {
+// The verse of the day (Scripture) and the study tip (practical advice) are
+// separate switches per group; the message holds whichever are on.
+function morningMessage({ verse, tip }, audience = 'campus', { withVerse = true, withTip = true } = {}) {
   const weekday = new Date().toLocaleDateString('en-GB', { timeZone: 'Africa/Lagos', weekday: 'long' })
   const more = {
     campus: `More books, notes and past questions: ${config.siteUrl}`,
@@ -236,11 +237,8 @@ function morningMessage({ verse, tip }, audience = 'campus') {
   }[audience] || ''
   return [
     `☀️ *Good morning, family! Happy ${weekday}.*`,
-    '',
-    '📖 *Verse of the day*',
-    `"${verse.text}"`,
-    `— *${verse.ref}*`,
-    ...(audience === 'general' ? [] : ['', '💡 *Study tip*', tip.text]),
+    ...(withVerse ? ['', '📖 *Verse of the day*', `"${verse.text}"`, `— *${verse.ref}*`] : []),
+    ...(withTip ? ['', '💡 *Study tip of the day*', tip.text] : []),
     '',
     `Have a blessed day 🙏 ${more}`,
   ].join('\n')
@@ -248,7 +246,7 @@ function morningMessage({ verse, tip }, audience = 'campus') {
 
 // test = FORCE_MORNING=1 at startup: post right now, only to the groups in
 // ALLOWED_GROUP_JID (your test group), and don't count it.
-async function maybeMorningPost(getSock, { test = false } = {}) {
+export async function maybeMorningPost(getSock, { test = false } = {}) {
   const sock = getSock()
   if (!sock || !config.botApiKey) return
   if (!test && !config.morningPost) return
@@ -257,7 +255,10 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
 
   const key = `${year}-${monthName}-${day}`
   const done = getState('morningPosted', {})
-  const due = test ? config.allowedGroups : allowedGroupsFor('morningPost', inPrayer).filter((jid) => done[jid] !== key)
+  // Groups with the verse, the study tip or both switched on.
+  const due = test
+    ? config.allowedGroups
+    : allowedGroups().filter((jid) => done[jid] !== key && !inPrayer(jid) && (groupSettings(jid).morningPost || studyTipOn(jid)))
   if (due.length === 0) {
     if (test) console.log('[morning] Test skipped: put your test group in ALLOWED_GROUP_JID first.')
     return
@@ -286,12 +287,15 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
   }
 
   for (const jid of due) {
-    const { audience } = groupSettings(jid)
-    const text = morningMessage(daily, audience)
+    const { audience, morningPost } = groupSettings(jid)
+    const withVerse = test || morningPost
+    const withTip = test || studyTipOn(jid)
+    const text = morningMessage(daily, audience, { withVerse, withTip })
     try {
       if (cards) {
-        await send(sock, jid, { image: cards[0], caption: text }, text)
-        if (audience !== 'general') await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
+        // The first card carries the message; the tip card follows the verse card.
+        await send(sock, jid, { image: withVerse ? cards[0] : cards[1], caption: text }, text)
+        if (withVerse && withTip) await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
       } else {
         await send(sock, jid, { text }, text)
       }
@@ -299,8 +303,9 @@ async function maybeMorningPost(getSock, { test = false } = {}) {
         done[jid] = key
         setState('morningPosted', done)
       }
-      console.log(`[morning] ${test ? 'TEST: ' : ''}Posted verse and tip in ${jid}`)
-      logActivity('morning', jid, text.split('\n').slice(3, 5).join(' '))
+      const what = [withVerse && 'verse', withTip && 'study tip'].filter(Boolean).join(' and ')
+      console.log(`[morning] ${test ? 'TEST: ' : ''}Posted ${what} in ${jid}`)
+      logActivity('morning', jid, withVerse ? `${daily.verse.ref}: ${daily.verse.text}` : `Study tip: ${daily.tip.text}`)
     } catch (err) {
       console.error('Morning post failed:', err.message)
     }

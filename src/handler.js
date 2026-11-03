@@ -4,7 +4,7 @@ import { searchLibrary } from './library.js'
 import { askAi, askChimeIn, askPrayer } from './ai.js'
 import { activity, recentChat, inPrayer } from './chatMemory.js'
 import { liveFacts } from './liveSettings.js'
-import { groupSettings } from './groups.js'
+import { groupSettings, studyTipOn } from './groups.js'
 import { parseLevelRequest, levelLabel, findCoursesAtLevel, formatItems, courseMenu, rememberMenu, hasPendingMenu, answerMenu } from './levelSearch.js'
 
 let knowledgeEntries = []
@@ -202,7 +202,8 @@ export function introFor(groupId) {
   ]
   if (inGroup) {
     if (s.bookOfDay) lines.push('📖 Share a *Book of the day* at noon')
-    if (s.morningPost) lines.push(s.audience === 'general' ? '☀️ Bring a verse of the day every morning' : '☀️ Bring a verse and study tip every morning')
+    if (s.morningPost) lines.push('☀️ Share a Bible verse of the day every morning')
+    if (studyTipOn(groupId)) lines.push('💡 Share a study tip of the day')
     if (s.prayer === 'join') lines.push('🙏 Join you in prayer when the group prays')
     if (s.birthdays) lines.push('🎂 Celebrate birthdays with you')
     lines.push('📢 Share library updates now and then')
