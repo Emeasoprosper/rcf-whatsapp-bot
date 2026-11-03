@@ -170,10 +170,12 @@ async function answerOnBehalf(sock, m, jid) {
 
 // A voice note gets a voice note back when the reply suits being spoken (no
 // links or lists) and today's AI limit allows; otherwise, or if the voice
-// fails, the usual text. Returns { sent, spoken }.
+// fails, the usual text. Voice notes are for private chats only (the free
+// voice allowance is small); groups always get text. Returns { sent, spoken }.
 async function sendReply(sock, jid, reply, { asVoice = false, quoted } = {}) {
   const opts = quoted ? { quoted } : undefined
-  if (asVoice && suitsVoice(reply) && takeAiCall()) {
+  const privateChat = !jid.endsWith('@g.us')
+  if (asVoice && privateChat && suitsVoice(reply) && takeAiCall()) {
     sock.sendPresenceUpdate('recording', jid).catch(() => {})
     const voice = await speak(reply)
     sock.sendPresenceUpdate('paused', jid).catch(() => {})
