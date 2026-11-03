@@ -46,9 +46,10 @@ export const config = {
   // Verse of the day + study tip in every group each morning from 7am.
   morningPost: process.env.MORNING_POST !== 'false',
   // "Book of the day": one library resource with its cover, posted in every
-  // group once a day from this Lagos hour (until activeToHour).
+  // group once a day at this Lagos hour, or as soon as the bot is back if it
+  // was offline then (until 10pm). See poster.js.
   featuredPost: process.env.FEATURED_POST !== 'false',
-  featuredHour: num(process.env.FEATURED_HOUR, 18),
+  featuredHour: num(process.env.FEATURED_HOUR, 12),
   reactions: true,
   // Join a lively discussion without being tagged, when the AI thinks it can
   // genuinely help. At most once per cooldown per group.

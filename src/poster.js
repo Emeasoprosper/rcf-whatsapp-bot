@@ -156,10 +156,10 @@ async function maybePostPromo(getSock) {
 const NEW_MONTH_FROM_HOUR = 8
 
 function lagosToday() {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Lagos', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', hourCycle: 'h23' })
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Lagos', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' })
     .formatToParts(new Date())
   const get = (type) => parts.find((p) => p.type === type).value
-  return { year: get('year'), monthName: get('month'), day: Number(get('day')), hour: Number(get('hour')) }
+  return { year: get('year'), monthName: get('month'), day: Number(get('day')), hour: Number(get('hour')), minute: Number(get('minute')) }
 }
 
 function newMonthFallback(monthName) {
@@ -299,7 +299,7 @@ const FEATURED_MEMORY = 60
 
 const FEATURED_FALLBACKS = [
   (r) => `*This one could change how you see your whole semester* 👀\n\nI've been telling people about it all week. Short, practical and straight to the point, the kind of read you finish and immediately want to share 🔥\n\nOpen it today, thank me later 😄`,
-  (r) => `*Looking for something worth your screen time tonight?* 📱\n\nSkip the endless scrolling for 20 minutes and give this a try. ${r.author ? `${r.author} has a way of saying things that just stick.` : 'It says things that just stick.'} 🙌\n\nIt's free on our library, go and see 👇`,
+  (r) => `*Looking for something worth your screen time today?* 📱\n\nSkip the endless scrolling for 20 minutes and give this a try. ${r.author ? `${r.author} has a way of saying things that just stick.` : 'It says things that just stick.'} 🙌\n\nIt's free on our library, go and see 👇`,
   (r) => `*Your future self will thank you for reading this* 🙏\n\nOne good book at the right time can reset your focus, your faith and your plans. This might be that book for you ✨\n\nTap the link and start the first page today.`,
 ]
 
@@ -336,36 +336,55 @@ async function prepareFeatured() {
     } catch (err) {
       console.error('[featured] Could not draw the card, sending the plain cover:', err.message)
     }
-    let words
-    try {
-      words = await askFeaturedCaption(resource)
-    } catch (err) {
-      console.error('[featured] AI caption failed, using a ready one:', err.message)
-      words = FEATURED_FALLBACKS[Math.floor(Math.random() * FEATURED_FALLBACKS.length)](resource)
-    }
-    const caption = [
-      '📚 *BOOK OF THE DAY*',
-      '',
-      words,
-      '',
-      `📖 *${resource.title}*${resource.author ? ` by ${resource.author}` : ''}`,
-      `👉 Read it free: ${resource.url}`,
-    ].join('\n')
-    return { resource, image, caption }
+    return { resource, image, caption: await featuredCaption(resource) }
   }
-  return null
+  // No cover would download: still post today, as text with the link.
+  console.error('[featured] No cover could be downloaded, posting as text.')
+  return { resource: pool[0], image: null, caption: await featuredCaption(pool[0]) }
 }
+
+async function featuredCaption(resource) {
+  let words
+  try {
+    words = await askFeaturedCaption(resource)
+  } catch (err) {
+    console.error('[featured] AI caption failed, using a ready one:', err.message)
+    words = FEATURED_FALLBACKS[Math.floor(Math.random() * FEATURED_FALLBACKS.length)](resource)
+  }
+  return [
+    '📚 *BOOK OF THE DAY*',
+    '',
+    words,
+    '',
+    `📖 *${resource.title}*${resource.author ? ` by ${resource.author}` : ''}`,
+    `👉 Read it free: ${resource.url}`,
+  ].join('\n')
+}
+
+// Posted once a day at featuredHour (12 noon Lagos: students check their
+// phones between lectures, and the 7am slot already has the verse). It is
+// prepared from 15 minutes before so it goes out right on the hour. If the
+// bot was offline or asleep at noon, it posts as soon as it's back, until
+// FEATURED_UNTIL_HOUR, so a day is never skipped but nobody is pinged at night.
+const FEATURED_UNTIL_HOUR = 22
+const FEATURED_PREP_MINUTES = 15
+const FEATURED_CHECK_MS = 30 * 1000
+
+let featuredReady = null // { key, post }: today's post, made once
+let featuredBusy = false
+let featuredWarned = ''
 
 // test = FORCE_FEATURED=1 at startup: post right now, only to the groups in
 // ALLOWED_GROUP_JID (your test group), and don't count it.
-async function maybeFeaturedPost(getSock, { test = false } = {}) {
+export async function maybeFeaturedPost(getSock, { test = false } = {}) {
   const sock = getSock()
-  if (!sock) return
+  if (!sock || featuredBusy) return
   if (!test && !config.featuredPost) return
-  const { year, monthName, day, hour } = lagosToday()
-  if (!test && (hour < config.featuredHour || !isActiveHours())) return
-
+  const { year, monthName, day, hour, minute } = lagosToday()
   const key = `${year}-${monthName}-${day}`
+  const minutesToGo = config.featuredHour * 60 - (hour * 60 + minute)
+  if (!test && (hour >= FEATURED_UNTIL_HOUR || minutesToGo > FEATURED_PREP_MINUTES)) return
+
   const done = getState('featuredPosted', {})
   const due = test ? config.allowedGroups : allowedGroups().filter((jid) => done[jid] !== key)
   if (due.length === 0) {
@@ -373,28 +392,44 @@ async function maybeFeaturedPost(getSock, { test = false } = {}) {
     return
   }
 
-  const post = await prepareFeatured()
-  if (!post) {
-    console.log('[featured] No resource with a cover found yet, will try again shortly.')
-    return
-  }
-
-  for (const jid of due) {
-    try {
-      await send(sock, jid, { image: post.image, caption: post.caption }, post.caption)
-      if (!test) {
-        done[jid] = key
-        setState('featuredPosted', done)
+  featuredBusy = true
+  try {
+    if (test || featuredReady?.key !== key) {
+      const post = await prepareFeatured()
+      if (!post) {
+        if (featuredWarned !== key) console.log('[featured] Library not reachable or empty yet, retrying every 30 seconds.')
+        featuredWarned = key
+        return
       }
-      console.log(`[featured] ${test ? 'TEST: ' : ''}Posted "${post.resource.title}" in ${jid}`)
-      logActivity('featured', jid, `Book of the day: ${post.resource.title}`)
-    } catch (err) {
-      console.error('Book of the day post failed:', err.message)
+      featuredReady = { key, post }
+      console.log(`[featured] Today's book is ready: "${post.resource.title}"`)
     }
-  }
-  if (!test) {
-    const history = getState('featuredHistory', [])
-    setState('featuredHistory', [post.resource.id, ...history.filter((id) => id !== post.resource.id)].slice(0, FEATURED_MEMORY))
+    // Made early: wait for the hour itself.
+    if (!test && minutesToGo > 0) return
+
+    const { post } = featuredReady
+    let sent = 0
+    for (const jid of due) {
+      try {
+        await send(sock, jid, post.image ? { image: post.image, caption: post.caption } : { text: post.caption }, post.caption)
+        sent += 1
+        if (!test) {
+          done[jid] = key
+          setState('featuredPosted', done)
+        }
+        console.log(`[featured] ${test ? 'TEST: ' : ''}Posted "${post.resource.title}" in ${jid}`)
+        logActivity('featured', jid, `Book of the day: ${post.resource.title}`)
+      } catch (err) {
+        // Not marked as done, so the next check (30 seconds) tries this group again.
+        console.error('Book of the day post failed, will retry:', err.message)
+      }
+    }
+    if (!test && sent) {
+      const history = getState('featuredHistory', [])
+      setState('featuredHistory', [post.resource.id, ...history.filter((id) => id !== post.resource.id)].slice(0, FEATURED_MEMORY))
+    }
+  } finally {
+    featuredBusy = false
   }
 }
 
@@ -492,7 +527,11 @@ export function startPoster(getSock) {
     setTimeout(() => maybeMorningPost(getSock, { test: true }).catch((err) => console.error('Morning test failed:', err.message)), 20 * 1000)
   }
 
-  setInterval(() => maybeFeaturedPost(getSock).catch((err) => console.error('Book of the day check failed:', err.message)), PROMO_CHECK_MS)
+  // Every 30 seconds so it lands right at noon, plus once just after
+  // connecting so a restart in the afternoon posts straight away.
+  const featured = () => maybeFeaturedPost(getSock).catch((err) => console.error('Book of the day check failed:', err.message))
+  setInterval(featured, FEATURED_CHECK_MS)
+  setTimeout(featured, 20 * 1000)
   if (process.env.FORCE_FEATURED) {
     console.log('[featured] Test mode: posting a book of the day to your test group in 25 seconds...')
     setTimeout(() => maybeFeaturedPost(getSock, { test: true }).catch((err) => console.error('Book of the day test failed:', err.message)), 25 * 1000)
