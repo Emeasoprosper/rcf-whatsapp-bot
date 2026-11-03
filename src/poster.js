@@ -387,7 +387,12 @@ async function prepareFeatured() {
   const history = getState('featuredHistory', [])
   // Never past questions or lecture notes: the post goes to every kind of
   // group, including ones that aren't for students.
-  const all = (await featuredCandidates()).filter((r) => !r.academic)
+  // With "Only promote openly licensed books" on, only public-domain and
+  // Creative Commons books (added through the app's free-book search).
+  const all = (await featuredCandidates()).filter((r) => !r.academic && (!config.featuredOnlyLicensed || r.licence))
+  if (all.length === 0 && config.featuredOnlyLicensed) {
+    console.log('[featured] No openly licensed book in the library yet: add some from the app\'s free-book search.')
+  }
   const fresh = all.filter((r) => !history.includes(r.id))
   const pool = (fresh.length ? fresh : all).slice(0, 8)
   if (pool.length === 0) return null
@@ -429,6 +434,7 @@ async function featuredCaption(resource) {
     words,
     '',
     `📖 *${resource.title}*${resource.author ? ` by ${resource.author}` : ''}`,
+    ...(resource.licence ? [`🔓 ${/public domain/i.test(resource.licence) ? 'Public domain' : resource.licence.replace(/\s*\(.*\)\s*$/, '')} · free to read and share`] : []),
     `👉 Read it free: ${resource.url}`,
   ].join('\n')
 }

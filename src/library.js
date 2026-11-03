@@ -66,7 +66,10 @@ export async function featuredCandidates() {
     })
     .map((r) => {
       const kind = `${r.type || ''} ${r.type_label || ''} ${(r.categories || []).join(' ')}`
+      // Openly licensed books (public domain, Creative Commons) are safe to
+      // advertise, so they come first.
       const score =
+        (r.external_licence ? 4 : 0) +
         (BOOKISH.test(kind) ? 3 : 0) -
         (PLAIN.test(kind) ? 3 : 0) +
         ((r.description || '').trim().length > 40 ? 2 : 0) +
@@ -83,6 +86,7 @@ export async function featuredCandidates() {
         coverUrl: r.thumbnail_url.startsWith('/') ? `${config.backendUrl}${r.thumbnail_url}` : r.thumbnail_url,
         url: `${config.siteUrl}/library/${r.id}`,
         academic: PLAIN.test(kind),
+        licence: r.external_licence || null,
         score,
       }
     })

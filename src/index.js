@@ -7,6 +7,7 @@ import path from 'node:path'
 import { config } from './config.js'
 import { handleMessage, handlePrivateMessage, maybeChimeIn, maybePrayAlong, REACT_MARKER, takeAiCall } from './handler.js'
 import { logChat, startChatLog } from './chatLog.js'
+import { speak, suitsVoice } from './voice.js'
 import { transcribeVoice } from './ai.js'
 import { remember, recentChat, inPrayer } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
@@ -167,6 +168,23 @@ async function answerOnBehalf(sock, m, jid) {
   return onPrivateMessage(sock, voiceNote, jid)
 }
 
+// A voice note gets a voice note back when the reply suits being spoken (no
+// links or lists) and today's AI limit allows; otherwise, or if the voice
+// fails, the usual text. Returns { sent, spoken }.
+async function sendReply(sock, jid, reply, { asVoice = false, quoted } = {}) {
+  const opts = quoted ? { quoted } : undefined
+  if (asVoice && suitsVoice(reply) && takeAiCall()) {
+    sock.sendPresenceUpdate('recording', jid).catch(() => {})
+    const voice = await speak(reply)
+    sock.sendPresenceUpdate('paused', jid).catch(() => {})
+    if (voice) {
+      const sent = await sock.sendMessage(jid, { audio: voice.audio, mimetype: 'audio/ogg; codecs=opus', ptt: true, seconds: voice.seconds }, opts)
+      return { sent, spoken: true }
+    }
+  }
+  return { sent: await sock.sendMessage(jid, { text: reply }, opts), spoken: false }
+}
+
 // Private chats are saved for the admin app's Chats tab (superadmins only),
 // so each person is told once, under Bro Paul's first reply to them.
 const PRIVACY_NOTICE = '\n\n_🔒 Heads-up: our chats are saved so the library team can improve me. Only the library admins can see them._'
@@ -234,8 +252,11 @@ async function onPrivateMessage(sock, m, jid) {
 
   const { text: reply, sticker } = splitStickerTag(raw)
   if (reply) {
-    await sock.sendMessage(jid, { text: reply + privacyNotice(jid) })
-    remember(jid, { text: reply, fromBot: true })
+    const notice = privacyNotice(jid)
+    const { spoken } = await sendReply(sock, jid, isVoice ? reply : reply + notice, { asVoice: isVoice })
+    // A voice reply can't carry the written notice, so it follows as text.
+    if (isVoice && notice) await sock.sendMessage(jid, { text: notice.trim() }).catch(() => {})
+    remember(jid, { text: reply, fromBot: true, kind: spoken ? 'voice' : 'text' })
   }
   if (sticker) await maybeSendSticker(sock, jid, sticker)
   // Private chats stay private: the admin Activity tab only sees that one happened.
@@ -388,11 +409,11 @@ async function onMessage(sock, m) {
     // The AI may end its reply with [sticker: mood]: text first, then the sticker.
     const { text: reply, sticker } = splitStickerTag(raw)
     if (reply) {
-      const sent = await sock.sendMessage(jid, { text: reply }, { quoted: m })
+      const { sent, spoken } = await sendReply(sock, jid, reply, { asVoice: isVoice, quoted: m })
       // "Who are you?" gets the introduction: remember it so it can be
       // cleaned up if the group's settings change.
       if (reply.startsWith('Hello everyone! 👋')) rememberPost(jid, sent?.key, 'intro', { signature: introSignature(jid) })
-      remember(jid, { text: reply, fromBot: true })
+      remember(jid, { text: reply, fromBot: true, kind: spoken ? 'voice' : 'text' })
       const kind = /^Here's what I found|^I couldn't find/.test(reply) ? 'search' : 'reply'
       logActivity(kind, jid, `${senderName || 'Member'}: "${text.slice(0, 80)}" → ${reply.slice(0, 120)}`)
     }

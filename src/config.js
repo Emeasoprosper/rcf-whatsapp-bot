@@ -13,6 +13,11 @@ export const config = {
   // Same default your backend uses in rcf-library-backend/src/services/aiAnalysis.js.
   // Copy the GEMINI_MODEL value from your Render backend env to be safe.
   geminiModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+  // Bro Paul's spoken replies (voice note in, voice note out). The voice is
+  // one of Gemini's male voices; switch the replies off from the admin app.
+  voiceReplies: process.env.VOICE_REPLIES !== 'false',
+  ttsModel: process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts',
+  ttsVoice: process.env.GEMINI_TTS_VOICE || 'Charon',
   // 'tag_only' = answer only when tagged. 'tag_and_requests' = also answer
   // clear "I need X book / past question" messages without a tag.
   botMode: process.env.BOT_MODE === 'tag_only' ? 'tag_only' : 'tag_and_requests',
