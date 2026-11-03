@@ -16,7 +16,7 @@ import { setStatus, startHeartbeat, currentStatus } from './status.js'
 import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact, isPrayerLike } from './reactions.js'
 import { initStickers, learnSticker, forgetLastSticker, relabelLastSticker, stickerSummary, maybeSendSticker, splitStickerTag, MOODS } from './stickers.js'
 import { handleBirthdayWish } from './birthday.js'
-import { initState } from './state.js'
+import { initState, getState, setState } from './state.js'
 import { startLiveSettings } from './liveSettings.js'
 import { startActivityLog, logActivity } from './activity.js'
 
@@ -166,6 +166,22 @@ async function answerOnBehalf(sock, m, jid) {
   return onPrivateMessage(sock, voiceNote, jid)
 }
 
+// Private chats are saved for the admin app's Chats tab (superadmins only),
+// so each person is told once, under Bro Paul's first reply to them.
+const PRIVACY_NOTICE = '\n\n_🔒 Heads-up: our chats are saved so the library team can improve me. Only the library admins can see them._'
+const PRIVACY_NOTICE_MAX = 20000
+
+function privacyNotice(jid) {
+  if (!config.botApiKey || config.saveChats === false) return ''
+  const told = getState('privacyNoticed', {})
+  if (told[jid]) return ''
+  told[jid] = Date.now()
+  const ids = Object.keys(told)
+  if (ids.length > PRIVACY_NOTICE_MAX) delete told[ids[0]]
+  setState('privacyNoticed', told)
+  return PRIVACY_NOTICE
+}
+
 async function onPrivateMessage(sock, m, jid) {
   if (!config.privateChats) return
   if (m.key.fromMe) return answerOnBehalf(sock, m, jid)
@@ -217,7 +233,7 @@ async function onPrivateMessage(sock, m, jid) {
 
   const { text: reply, sticker } = splitStickerTag(raw)
   if (reply) {
-    await sock.sendMessage(jid, { text: reply })
+    await sock.sendMessage(jid, { text: reply + privacyNotice(jid) })
     remember(jid, { text: reply, fromBot: true })
   }
   if (sticker) await maybeSendSticker(sock, jid, sticker)
