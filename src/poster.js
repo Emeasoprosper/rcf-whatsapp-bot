@@ -98,11 +98,21 @@ async function pollAnnouncements(getSock) {
 // ---------- "Upload to the library" adverts ----------
 
 // audience = the group's setting: only 'campus' groups hear about past
-// questions and lecture notes.
+// questions and lecture notes; 'mixed' groups mention students lightly;
+// 'general' groups (not students) never hear about students, school or
+// exams: the library is offered as books that bless and change lives.
 function promoTexts(audience = 'campus') {
   const site = config.siteUrl
   const upload = `${site}/contribute/submit`
-  if (audience !== 'campus') {
+  if (audience === 'general') {
+    return [
+      `📚 *That book that blessed you can bless someone else too*\n\nA devotional that lifted you, a message that changed how you see God, a book that sorted your finances or your home: share it on the RCF digital library so others can find it 🙌\n\n📤 Share here: ${upload}\n\n"Freely you have received, freely give." Matthew 10:8`,
+      `🕊️ *Help someone grow today*\n\nUpload a Christian book, devotional or sermon to the RCF digital library. It takes a minute, and it could be exactly what someone needs this season.\n\n📤 ${upload}\n🌐 Explore: ${site}`,
+      `📖 *Looking for something good to read?*\n\nFree Christian books, devotionals and audio sermons on faith, prayer, marriage, money, purpose and more, all in one place on the RCF digital library.\n\n🌐 ${site}\n📤 Have a good book? Share it: ${upload}`,
+      `✨ *Every upload helps change a life*\n\nSomewhere, someone is praying for direction, healing or peace. The book or sermon on your phone could be God's answer for them. Share it on the RCF digital library 🙏\n\n📤 ${upload}`,
+    ]
+  }
+  if (audience === 'mixed') {
     return [
       `📚 *Got a good book on your phone?*\n\nThat PDF you loved could bless someone else! 🙌 Share it on the RCF digital library so others can read it too: Christian books, devotionals, sermons, self-development and research materials.\n\n📤 Share here: ${upload}\n\n"Freely you have received, freely give." Matthew 10:8`,
       `✨ *The RCF Library grows because of YOU!*\n\nBooks, devotionals, audio sermons and resources for students and anyone doing research. Every upload helps someone grow.\n\n📤 Upload: ${upload}\n🌐 Explore: ${site}`,
