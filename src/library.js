@@ -44,12 +44,17 @@ export async function searchLibrary(searchText, { type, pageSize = config.maxRes
 }
 
 const BOOKISH = /book|devotional|novel|magazine|biography|christian|inspiration/i
-const PLAIN = /past|question|handout|note|slide|manual|syllabus|timetable/i
+const PLAIN = /past|question|handout|note|slide|manual|syllabus|timetable|course|lecture|exam|engineering|agricultur|compiled|thesis|project/i
+// Book of the day is for everyone, so only these kinds of books qualify.
+const FOR_EVERYONE =
+  /christian|bible|biblical|spiritual|miracle|holy spirit|theolog|faith|prayer|devotional|personal development|self.?help|motivation|inspiration|leadership|business|management|money|finance|wealth|literature|novel|fiction|story|biography|women|men\b|marriage|relationship|family|parenting|health|living|success/i
 
 // Approved resources that have a cover, from both the most downloaded and the
 // newest, best first, for the daily "book of the day" post. Books and
 // devotionals with a real description beat past questions and handouts,
 // whose covers are usually plain scans.
+// fromWeb: added from the app's free-book web search (they carry a licence)
+// rather than uploaded to the library; Book of the day leaves those out.
 export async function featuredCandidates() {
   const lists = await Promise.all(
     ['popular', 'recent'].map((sort) =>
@@ -66,10 +71,8 @@ export async function featuredCandidates() {
     })
     .map((r) => {
       const kind = `${r.type || ''} ${r.type_label || ''} ${(r.categories || []).join(' ')}`
-      // Openly licensed books (public domain, Creative Commons) are safe to
-      // advertise, so they come first.
+      const topics = `${(r.categories || []).join(' ')} ${r.category || ''}`
       const score =
-        (r.external_licence ? 4 : 0) +
         (BOOKISH.test(kind) ? 3 : 0) -
         (PLAIN.test(kind) ? 3 : 0) +
         ((r.description || '').trim().length > 40 ? 2 : 0) +
@@ -85,7 +88,9 @@ export async function featuredCandidates() {
         categories: r.categories || [],
         coverUrl: r.thumbnail_url.startsWith('/') ? `${config.backendUrl}${r.thumbnail_url}` : r.thumbnail_url,
         url: `${config.siteUrl}/library/${r.id}`,
-        academic: PLAIN.test(kind),
+        academic: PLAIN.test(kind) || Boolean(r.course_code),
+        forEveryone: FOR_EVERYONE.test(topics) && !['audio', 'video'].includes(r.type),
+        fromWeb: Boolean(r.external_licence),
         licence: r.external_licence || null,
         score,
       }

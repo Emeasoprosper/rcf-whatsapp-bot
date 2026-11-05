@@ -61,6 +61,30 @@ function noLongerFits(post, jid) {
   }
 }
 
+// One-off: deletes the most recent Book of the day post in every group (it
+// was a web-search book, before Book of the day moved to library uploads).
+// Runs once after connecting; the marker stops it running again.
+const RECALL_MARK = 'featured-web-book-2026-11-05'
+
+export async function recallLatestFeatured(sock) {
+  if (!sock || getState('featuredRecalled', '') === RECALL_MARK) return
+  setState('featuredRecalled', RECALL_MARK)
+  const all = getState(STATE_KEY, {})
+  const now = Date.now()
+  let count = 0
+  for (const [jid, posts] of Object.entries(all)) {
+    const latest = posts.filter((p) => p.kind === 'featured' && now - p.at < KEEP_MS).at(-1)
+    if (!latest) continue
+    // Already deleted by an admin: WhatsApp just ignores it.
+    await sock.sendMessage(jid, { delete: { remoteJid: jid, id: latest.id, fromMe: true } }).catch(() => {})
+    all[jid] = posts.filter((p) => p.id !== latest.id)
+    count += 1
+    logActivity('cleanup', jid, 'Deleted the latest Book of the day post (it was a web book, not from the library)')
+  }
+  setState(STATE_KEY, all)
+  console.log(`[cleanup] Deleted the latest Book of the day post in ${count} group(s).`)
+}
+
 const running = new Set()
 
 // Called when a group's settings change (and once per group after a restart).

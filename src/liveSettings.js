@@ -26,7 +26,6 @@ function apply(settings = {}) {
   set('featuredPost', settings.featuredPost)
   set('saveChats', settings.saveChats)
   set('voiceReplies', settings.voiceReplies)
-  set('featuredOnlyLicensed', settings.featuredOnlyLicensed)
   set('stickers', settings.stickers)
   set('promoEveryHours', settings.promoEveryHours)
   set('activeFromHour', settings.activeFromHour)

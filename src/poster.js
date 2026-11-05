@@ -385,14 +385,12 @@ async function fetchCover(url) {
 // isn't always the same top book) and makes its picture and words.
 async function prepareFeatured() {
   const history = getState('featuredHistory', [])
-  // Never past questions or lecture notes: the post goes to every kind of
-  // group, including ones that aren't for students.
-  // With "Only promote openly licensed books" on, only public-domain and
-  // Creative Commons books (added through the app's free-book search).
-  const all = (await featuredCandidates()).filter((r) => !r.academic && (!config.featuredOnlyLicensed || r.licence))
-  if (all.length === 0 && config.featuredOnlyLicensed) {
-    console.log('[featured] No openly licensed book in the library yet: add some from the app\'s free-book search.')
-  }
+  // Only books uploaded to our own library (not ones added from the web
+  // search), and only kinds everyone enjoys: Christian books, personal
+  // growth, stories, business... never course material or past questions,
+  // since the post goes to every kind of group.
+  const all = (await featuredCandidates()).filter((r) => !r.fromWeb && !r.academic && r.forEveryone)
+  if (all.length === 0) console.log('[featured] No library book fits Book of the day (needs a cover and a non-academic category).')
   const fresh = all.filter((r) => !history.includes(r.id))
   const pool = (fresh.length ? fresh : all).slice(0, 8)
   if (pool.length === 0) return null

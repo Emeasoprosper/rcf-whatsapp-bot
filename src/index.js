@@ -13,7 +13,7 @@ import { remember, recentChat, inPrayer } from './chatMemory.js'
 import { startPoster, queueWelcome } from './poster.js'
 import { loadAuth } from './authStore.js'
 import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup, whenSettingsChange, markLeft } from './groups.js'
-import { rememberPost, introSignature, cleanUpGroup } from './cleanup.js'
+import { rememberPost, introSignature, cleanUpGroup, recallLatestFeatured } from './cleanup.js'
 import { setStatus, startHeartbeat, currentStatus } from './status.js'
 import { HEART, isThanksOnly, isBirthdayWish, isGoodNews, shouldReact, isPrayerLike } from './reactions.js'
 import { initStickers, learnSticker, forgetLastSticker, relabelLastSticker, stickerSummary, maybeSendSticker, splitStickerTag, MOODS } from './stickers.js'
@@ -468,6 +468,7 @@ async function start() {
       config.botPhone = bareId(sock.user?.id)
       console.log(`Connected as ${sock.user?.id} (login saved in ${auth.where}). ${config.botName} is online.`)
       setStatus('online', { phone: bareId(sock.user?.id) })
+      setTimeout(() => recallLatestFeatured(currentSock).catch((err) => console.error('Book of the day recall failed:', err.message)), 15000)
       startPoster(() => currentSock)
       await refreshGroups()
       reportAllGroups(sock)
