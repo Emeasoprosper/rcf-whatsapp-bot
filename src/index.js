@@ -563,6 +563,17 @@ if (process.env.PORT) {
     .listen(process.env.PORT, () => console.log(`Health check on :${process.env.PORT}`))
 }
 
+// Render's free plan sleeps a service after ~15 minutes with no web visits,
+// which drops WhatsApp. Visiting our own public address every 10 minutes
+// keeps it awake (Render sets RENDER_EXTERNAL_URL). An outside monitor such
+// as UptimeRobot is still needed to wake it if it ever does fall asleep.
+const SELF_URL = process.env.KEEP_AWAKE_URL || process.env.RENDER_EXTERNAL_URL
+if (SELF_URL && process.env.PORT) {
+  setInterval(() => {
+    fetch(SELF_URL, { signal: AbortSignal.timeout(30000) }).catch((err) => console.warn('Keep-awake ping failed:', err.message))
+  }, 10 * 60 * 1000).unref()
+}
+
 process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason))
 
 await initState()
