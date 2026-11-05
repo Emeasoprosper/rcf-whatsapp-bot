@@ -10,7 +10,7 @@ import { logChat, startChatLog } from './chatLog.js'
 import { speak, suitsVoice } from './voice.js'
 import { transcribeVoice } from './ai.js'
 import { remember, recentChat, inPrayer } from './chatMemory.js'
-import { startPoster, queueWelcome } from './poster.js'
+import { startPoster, queueWelcome, allowRepostToday } from './poster.js'
 import { loadAuth } from './authStore.js'
 import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup, whenSettingsChange, markLeft } from './groups.js'
 import { rememberPost, introSignature, cleanUpGroup, recallLatestFeatured } from './cleanup.js'
@@ -468,7 +468,10 @@ async function start() {
       config.botPhone = bareId(sock.user?.id)
       console.log(`Connected as ${sock.user?.id} (login saved in ${auth.where}). ${config.botName} is online.`)
       setStatus('online', { phone: bareId(sock.user?.id) })
-      setTimeout(() => recallLatestFeatured(currentSock).catch((err) => console.error('Book of the day recall failed:', err.message)), 15000)
+      setTimeout(async () => {
+        await recallLatestFeatured(currentSock).catch((err) => console.error('Book of the day recall failed:', err.message))
+        allowRepostToday()
+      }, 15000)
       startPoster(() => currentSock)
       await refreshGroups()
       reportAllGroups(sock)

@@ -446,6 +446,27 @@ const FEATURED_UNTIL_HOUR = 22
 const FEATURED_PREP_MINUTES = 15
 const FEATURED_CHECK_MS = 30 * 1000
 
+// One-off, 5 Nov 2026 only: after the web-book post was deleted, let today's
+// Book of the day go out again (now from the library). Does nothing on any
+// other day, so it can never cause a double post later.
+export function allowRepostToday() {
+  const { year, monthName, day } = lagosToday()
+  const key = `${year}-${monthName}-${day}`
+  if (key !== '2026-November-5' || getState('featuredRepostDone', '') === key) return
+  setState('featuredRepostDone', key)
+  const done = getState('featuredPosted', {})
+  const tries = getState('postTries', {})
+  for (const jid of Object.keys(done)) {
+    if (done[jid] !== key) continue
+    delete done[jid]
+    delete tries[`featured:${jid}`]
+  }
+  setState('featuredPosted', done)
+  setState('postTries', tries)
+  featuredReady = null
+  console.log('[featured] Today\'s Book of the day will be posted again, from the library.')
+}
+
 let featuredReady = null // { key, post }: today's post, made once
 let featuredBusy = false
 let featuredWarned = ''
