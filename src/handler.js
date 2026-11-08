@@ -494,7 +494,9 @@ export async function handlePrivateMessage(msg) {
   if (acceptedContactOffer(msg.senderId, text)) return contactReply()
   const aboutCreator = await creatorAnswer(text, msg.senderId, { senderName: msg.senderName, history: msg.history || [], isPrivate: true })
   if (aboutCreator) return aboutCreator.slice(0, 1800)
-  if (INTRO_WORDS.test(text) && /who\s+are\s+you|what\s+(can\s+you\s+do|do\s+you\s+do)/i.test(text)) return introFor(null)
+  // "What can you do" gets the introduction; "who are you" goes to the AI,
+  // which answers about itself a little at a time like a person would.
+  if (/what\s+(can\s+you\s+do|do\s+you\s+do)/i.test(text)) return introFor(null)
 
   // Answer to a course list Bro Paul just sent ("first 3", "2", "MTH 222").
   const picked = answerMenu(msg.senderId, text)
