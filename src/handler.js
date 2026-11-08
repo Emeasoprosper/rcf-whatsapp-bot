@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { config, isActiveHours } from './config.js'
 import { searchLibrary } from './library.js'
+import { botApi } from './backend.js'
+import { logActivity } from './activity.js'
 import { askAi, askChimeIn, askPrayer } from './ai.js'
 import { activity, recentChat, inPrayer } from './chatMemory.js'
 import { liveFacts } from './liveSettings.js'
@@ -203,7 +205,7 @@ export function introFor(groupId) {
   if (inGroup) {
     if (s.bookOfDay) lines.push('📖 Share a *Book of the day* at noon')
     if (s.morningPost) lines.push('☀️ Share a Bible verse of the day every morning')
-    if (studyTipOn(groupId)) lines.push('💡 Share a study tip of the day')
+    if (studyTipOn(groupId)) lines.push(s.audience === 'campus' ? '💡 Share a study tip of the day' : '💡 Share a helpful tip of the day')
     if (s.prayer === 'join') lines.push('🙏 Join you in prayer when the group prays')
     if (s.birthdays) lines.push('🎂 Celebrate birthdays with you')
     lines.push('📢 Share library updates now and then')
@@ -362,16 +364,36 @@ async function levelReply(text, ask, senderId) {
 // audience = the group's setting ('campus' in private chats). In a 'general'
 // group course materials get the research line; in a 'mixed' one they're
 // introduced as being for MOUAU students.
-async function resourceReply(text, senderId = '', audience = 'campus') {
+// who = { name, groupId } of the person asking, so a material the library
+// doesn't have can be filed as a request for the admins in their name.
+async function resourceReply(text, senderId = '', audience = 'campus', who = {}) {
   const academic = audience !== 'campus' && isAcademicRequest(stripMentions(text))
   if (academic && audience === 'general') return researchReply()
-  const reply = await searchReply(text, senderId)
+  const reply = await searchReply(text, senderId, who)
   if (!academic) return reply
   // "For MOUAU students, you can access these…" only makes sense with results.
   return /^(I couldn't find|I don't have|The library is slow)/.test(reply) ? `For MOUAU students 🎓: ${reply}` : FOR_MOUAU + reply
 }
 
-async function searchReply(text, senderId) {
+// Nothing found: file it for the admins (they get a push and see it under
+// Requests); when they add it, Bro Paul DMs this person the link. Returns
+// false if the backend couldn't take it, so the reply falls back to links.
+async function fileRequest(query, senderId, who) {
+  if (!config.botApiKey || !senderId || query.length < 3) return false
+  try {
+    await botApi('/requests', {
+      method: 'POST',
+      body: { title: query, courseCode: courseCodeOnly(query) || undefined, whatsappId: senderId, whatsappName: who.name || undefined, groupJid: who.groupId || undefined },
+    })
+    logActivity('request', who.groupId || senderId, `Filed a material request for "${query}"${who.name ? ` from ${who.name}` : ''}`)
+    return true
+  } catch (err) {
+    console.error('Could not file the material request:', err.message)
+    return false
+  }
+}
+
+async function searchReply(text, senderId, who = {}) {
   const ask = parseLevelRequest(stripMentions(text))
   if (ask) return levelReply(text, ask, senderId)
   const query = extractSearchQuery(stripMentions(text))
@@ -385,6 +407,10 @@ async function searchReply(text, senderId) {
     const code = courseCodeOnly(query)
     if (items.length === 0 && code && code !== query) items = await searchLibrary(code)
     if (items.length === 0) {
+      if (await fileRequest(query, senderId, who)) {
+        const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
+        return `I couldn't find "${query}" in the library yet 😔\n\n📝 I've sent a request to the library team for you. Once it's added, ${where} with the link.\n📤 Have it already? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
+      }
       return `I couldn't find "${query}" in the library yet 😔\n\n📝 Request it: ${config.siteUrl}/contribute/request\n📤 Have it? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
     }
     return formatResults(items)
@@ -420,13 +446,13 @@ function humanFallback(text, { tired = false } = {}) {
   return tired ? `${pickLine(TIRED_LINES)}${config.siteUrl}` : pickLine(BUSY_LINES)
 }
 
-async function aiReply(text, { senderName, senderId = '', history, isPrivate = false, audience = 'campus', praying = false, revealAi = true }) {
+async function aiReply(text, { senderName, senderId = '', groupId = null, history, isPrivate = false, audience = 'campus', praying = false, revealAi = true }) {
   if (!aiAllowed()) return humanFallback(text, { tired: true })
   aiCount += 1
   try {
     const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience, praying, revealAi })
     // The AI decided the member is asking for a material: look it up for real.
-    if (result.type === 'search') return await resourceReply(result.query, senderId, audience)
+    if (result.type === 'search') return await resourceReply(result.query, senderId, audience, { name: senderName, groupId })
     // Business or a request for the owner: the direct contact in DM (the AI
     // has talked it through first), an invite to the DM in a group.
     if (result.type === 'contact') return isPrivate ? businessReply() : dmInviteReply()
@@ -511,7 +537,7 @@ export async function handlePrivateMessage(msg) {
   }
 
   const reply = looksLikeResourceRequest(text) || looksLikeLevelRequest(text, { tagged: true })
-    ? await resourceReply(text, msg.senderId)
+    ? await resourceReply(text, msg.senderId, 'campus', { name: msg.senderName })
     : await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], isPrivate: true })
   return reply ? reply.slice(0, 1800) : null
 }
@@ -583,9 +609,9 @@ export async function handleMessage(msg) {
       : aboutCreator
         ? aboutCreator
         : isRequest
-          ? await resourceReply(text, msg.senderId, audience)
+          ? await resourceReply(text, msg.senderId, audience, { name: msg.senderName, groupId: msg.groupId })
           : tagged
-            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], audience, praying, revealAi })
+            ? await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, groupId: msg.groupId, history: msg.history || [], audience, praying, revealAi })
             : null
   if (!reply) return null
 

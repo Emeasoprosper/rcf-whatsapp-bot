@@ -265,6 +265,36 @@ async function maybeNewMonthWish(getSock, { test = false } = {}) {
 const MORNING_FROM_HOUR = 7
 const MORNING_UNTIL_HOUR = 12
 
+// Groups that aren't for MOUAU students get a tip for everyone instead of a
+// student study tip: reading, growth, and sharing books and materials on the
+// library, never past questions, exams or lectures. 'mixed' groups keep the
+// day's study tip unless it's only for students.
+const STUDENT_ONLY = /past (question|paper)|exam|lecture|class|course|semester|cgpa|revise|revision/i
+const TIPS_FOR_EVERYONE = [
+  'Read for just 15 minutes a day. That is about a book a month, and a year from now you will be a different person.',
+  'Got a good book, sermon or material on your phone? Upload it to the RCF library so it can bless someone else too.',
+  'Before you scroll in the morning, read one page that feeds your mind or your spirit. Start the day on purpose.',
+  'Learning is not only for students. Pick one skill this month and learn a little of it every day.',
+  'Write down one thing you learned today. Small notes become real wisdom over time.',
+  'Share what helped you. A book, a devotional or a talk that changed you might be exactly what a friend needs this week.',
+  'Feeling tired or stuck? Rest is not laziness. Take a short break, drink water, then do the next small thing.',
+  'Keep a "to read" list. When you have a free moment, you will know exactly what to open instead of scrolling.',
+  'Listen while you move: an audio sermon or audiobook turns traffic and chores into growth time.',
+  'Looking for a book the library does not have yet? Request it on the app, and help the library grow for everyone.',
+  'Discuss what you read with someone. Talking about it helps it stick and sharpens you both.',
+  'Read slowly what matters. One chapter understood beats five chapters skimmed.',
+  'Have materials that helped you at work or in life? Upload them to the library and help someone walking the same road.',
+  'Set one small reading goal for this week and tell a friend. A goal you share is a goal you keep.',
+]
+
+function tipFor(audience, tip) {
+  if (audience === 'campus' || (audience === 'mixed' && !STUDENT_ONLY.test(tip.text))) {
+    return { label: 'Study tip of the day', text: tip.text }
+  }
+  const dayNumber = Math.floor(Date.now() / 86400000)
+  return { label: 'Tip of the day', text: TIPS_FOR_EVERYONE[dayNumber % TIPS_FOR_EVERYONE.length] }
+}
+
 // The verse of the day (Scripture) and the study tip (practical advice) are
 // separate switches per group; the message holds whichever are on.
 function morningMessage({ verse, tip }, audience = 'campus', { withVerse = true, withTip = true } = {}) {
@@ -277,7 +307,7 @@ function morningMessage({ verse, tip }, audience = 'campus', { withVerse = true,
   return [
     `☀️ *Good morning, family! Happy ${weekday}.*`,
     ...(withVerse ? ['', '📖 *Verse of the day*', `"${verse.text}"`, `— *${verse.ref}*`] : []),
-    ...(withTip ? ['', '💡 *Study tip of the day*', tip.text] : []),
+    ...(withTip ? ['', `💡 *${tipFor(audience, tip).label}*`, tipFor(audience, tip).text] : []),
     '',
     `Have a blessed day 🙏 ${more}`,
   ].join('\n')
@@ -315,14 +345,20 @@ export async function maybeMorningPost(getSock, { test = false } = {}) {
   // The verse and the tip as square cards, like the app shows them. Drawn
   // once in memory for all groups and never saved. If drawing fails, the
   // plain text message still goes out.
-  let cards = null
+  let verseCard = null
   try {
-    cards = await Promise.all([
-      quoteCard({ kind: 'verse', label: 'Verse of the day', quote: daily.verse.text, by: daily.verse.ref }),
-      quoteCard({ kind: 'tip', label: 'Study tip of the day', quote: daily.tip.text, by: 'RCF Library' }),
-    ])
+    verseCard = await quoteCard({ kind: 'verse', label: 'Verse of the day', quote: daily.verse.text, by: daily.verse.ref })
   } catch (err) {
     console.error('Morning cards could not be drawn, sending text only:', err.message)
+  }
+  // One tip card per kind of tip (student / everyone), drawn once.
+  const tipCards = new Map()
+  async function tipCard(tip) {
+    if (!verseCard) return null
+    if (!tipCards.has(tip.text)) {
+      tipCards.set(tip.text, await quoteCard({ kind: 'tip', label: tip.label, quote: tip.text, by: 'RCF Library' }).catch(() => null))
+    }
+    return tipCards.get(tip.text)
   }
 
   for (const jid of due) {
@@ -330,6 +366,8 @@ export async function maybeMorningPost(getSock, { test = false } = {}) {
     const withVerse = test || morningPost
     const withTip = test || studyTipOn(jid)
     const text = morningMessage(daily, audience, { withVerse, withTip })
+    const tip = tipFor(audience, daily.tip)
+    const cards = verseCard ? [verseCard, await tipCard(tip)] : null
     if (!test && !mayTry('morning', jid, key)) continue
     // Marked as done as soon as the first message is out, so a problem with
     // the second card (or anything after) never re-sends the morning post.
@@ -339,14 +377,14 @@ export async function maybeMorningPost(getSock, { test = false } = {}) {
       setState('morningPosted', done)
     }
     try {
-      if (cards) {
+      if (cards && (withVerse || cards[1])) {
         // The first card carries the message; the tip card follows the verse card.
         const sent = await send(sock, jid, { image: withVerse ? cards[0] : cards[1], caption: text }, text)
         markDone()
         rememberPost(jid, sent?.key, 'morning', { verse: withVerse, tip: withTip })
-        if (withVerse && withTip) {
-          const tipCard = await sock.sendMessage(jid, { image: cards[1], caption: `💡 Study tip of the day · ${HANDLE}` })
-          rememberPost(jid, tipCard?.key, 'tip')
+        if (withVerse && withTip && cards[1]) {
+          const tipSent = await sock.sendMessage(jid, { image: cards[1], caption: `💡 ${tip.label} · ${HANDLE}` })
+          rememberPost(jid, tipSent?.key, 'tip')
         }
       } else {
         const sent = await send(sock, jid, { text }, text)
@@ -355,7 +393,7 @@ export async function maybeMorningPost(getSock, { test = false } = {}) {
       }
       const what = [withVerse && 'verse', withTip && 'study tip'].filter(Boolean).join(' and ')
       console.log(`[morning] ${test ? 'TEST: ' : ''}Posted ${what} in ${jid}`)
-      logActivity('morning', jid, withVerse ? `${daily.verse.ref}: ${daily.verse.text}` : `Study tip: ${daily.tip.text}`)
+      logActivity('morning', jid, withVerse ? `${daily.verse.ref}: ${daily.verse.text}` : `${tip.label}: ${tip.text}`)
     } catch (err) {
       console.error('Morning post failed:', err.message)
     }
