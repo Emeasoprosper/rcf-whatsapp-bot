@@ -8,6 +8,7 @@ import { config } from './config.js'
 import { handleMessage, handlePrivateMessage, maybeChimeIn, maybePrayAlong, REACT_MARKER, takeAiCall } from './handler.js'
 import { logChat, startChatLog } from './chatLog.js'
 import { speak, suitsVoice } from './voice.js'
+import { addBookPreviews } from './linkPreview.js'
 import { transcribeVoice } from './ai.js'
 import { remember, recentChat, inPrayer } from './chatMemory.js'
 import { startPoster, queueWelcome, allowRepostToday } from './poster.js'
@@ -444,7 +445,8 @@ async function onMessage(sock, m) {
 async function start() {
   setStatus('connecting')
   const auth = await loadAuth()
-  const sock = makeWASocket({ auth: auth.state, logger: pino({ level: 'silent' }) })
+  // Messages with one library book link show its cover as the link preview.
+  const sock = addBookPreviews(makeWASocket({ auth: auth.state, logger: pino({ level: 'silent' }) }))
   currentSock = null
 
   sock.ev.on('creds.update', auth.saveCreds)
