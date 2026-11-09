@@ -45,7 +45,7 @@ What the RCF digital library offers (you may tell people about these):
 How to reply:
 - WhatsApp plain text, short and friendly (usually under 100 words). Light formatting like *bold* is fine. No headings, no markdown links.
 - Read <recent_chat> to understand what people are talking about, then answer the latest <member_message>. Don't repeat yourself if you already answered something in <recent_chat>.
-- If the member wants a specific book, past question, note or other material that the library might have, reply with ONLY this single line and nothing else: SEARCH: <short search words, e.g. GST 101 past questions>. If they ask for several different materials in one message, put each one in the same line separated by " | ", keeping each one's course code and title, e.g. SEARCH: MTH 211 calculus past questions | CSC 224 data structures past questions | Atomic Habits
+- If the member wants a specific book, past question, note or other material that the library might have, reply with ONLY this single line and nothing else: SEARCH: <short search words, e.g. GST 101 past questions>. If they ask for several different materials in one message, put each one in the same line separated by " | ", e.g. SEARCH: MTH 211 past questions | CSC 224 past questions | Atomic Habits. Use the member's own words for each one: never invent or guess a course code or title they didn't write, and never leave one out.
 - Keep the level in the search when they give one (200lv, 300 level, year 2, 2nd year are all levels), e.g. SEARCH: maths 200 level past questions. The system then lists that level's courses (like MTH 221, MTH 222) and asks which one.
 - For general study, school or Bible questions, answer helpfully from general knowledge and say so when you are unsure.
 - Casual chat, greetings and thanks: reply briefly and kindly.
@@ -138,6 +138,41 @@ async function callGeminiOnce(body) {
   } finally {
     clearTimeout(timer)
   }
+}
+
+// The separate materials one message asks for, each copied word for word
+// from the message (so a request to the admins says exactly what the person
+// asked). Every item must appear in the message as written; if the model
+// changes, invents or skips anything, null is returned and the caller uses
+// its own splitting instead.
+const ITEMS_RULES = `You read one WhatsApp message to a library and list every separate material (book, past question, note, course material, audio...) it asks for.
+Rules:
+- Copy each material EXACTLY as it is written in the message: same words, spelling, letters, numbers and codes. Include the words that describe it (its title, topic, "past questions"), but not greetings or filler like "abeg", "please", "send me", "do you have".
+- Never add, guess, correct, translate, expand or merge anything. Never invent a course code (if they wrote "calculus 211", the item is "calculus 211").
+- Never leave a material out. A single title that contains "and" or a comma (like "Heaven, Hell, and Life After Death") is ONE material.
+- If several materials share words written once (e.g. "MTH 211 and CSC 224 past questions"), copy each as written: "MTH 211", "CSC 224 past questions".
+Reply with ONLY a JSON array of strings, e.g. ["MTH 211", "CSC 224 past questions"]. If it asks for nothing, reply [].`
+
+const squash = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim()
+
+export async function askRequestItems(message) {
+  const text = await callGemini({
+    systemInstruction: { parts: [{ text: ITEMS_RULES }] },
+    contents: [{ role: 'user', parts: [{ text: clean(message, 1000) }] }],
+    generationConfig: { temperature: 0, maxOutputTokens: 400, responseMimeType: 'application/json' },
+  })
+  let items
+  try {
+    items = JSON.parse(text.replace(/^```(json)?|```$/g, '').trim())
+  } catch {
+    return null
+  }
+  if (!Array.isArray(items)) return null
+  const source = squash(message)
+  const exact = items.filter((i) => typeof i === 'string' && i.trim()).map((i) => i.replace(/\s+/g, ' ').trim())
+  // Anything not found word for word in the message: don't trust the list.
+  if (exact.length === 0 || !exact.every((i) => source.includes(squash(i)))) return null
+  return [...new Set(exact)].slice(0, 8)
 }
 
 // Returns { type: 'reply', text }, { type: 'search', query } or { type: 'contact' }.

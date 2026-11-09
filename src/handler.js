@@ -3,7 +3,7 @@ import { config, isActiveHours } from './config.js'
 import { searchLibrary } from './library.js'
 import { botApi } from './backend.js'
 import { logActivity } from './activity.js'
-import { askAi, askChimeIn, askPrayer } from './ai.js'
+import { askAi, askChimeIn, askPrayer, askRequestItems } from './ai.js'
 import { activity, recentChat, inPrayer } from './chatMemory.js'
 import { liveFacts } from './liveSettings.js'
 import { groupSettings, studyTipOn } from './groups.js'
@@ -378,14 +378,23 @@ async function resourceReply(text, senderId = '', audience = 'campus', who = {})
 // Nothing found: file it for the admins (they get a push and see it under
 // Requests); when they add it, Bro Paul DMs this person the link. Returns
 // false if the backend couldn't take it, so the reply falls back to links.
-async function fileRequest(query, senderId, who) {
-  if (!config.botApiKey || !senderId || query.length < 3) return false
+// title = the material in the person's own words; who.asked = their whole
+// message, attached so the admins see exactly what was asked.
+async function fileRequest(title, senderId, who) {
+  if (!config.botApiKey || !senderId || title.length < 2) return false
   try {
     await botApi('/requests', {
       method: 'POST',
-      body: { title: query, courseCode: courseCodeOnly(query) || undefined, whatsappId: senderId, whatsappName: who.name || undefined, groupJid: who.groupId || undefined },
+      body: {
+        title,
+        courseCode: courseCodeOnly(title) || undefined,
+        asked: who.asked ? stripMentions(who.asked).slice(0, 500) : undefined,
+        whatsappId: senderId,
+        whatsappName: who.name || undefined,
+        groupJid: who.groupId || undefined,
+      },
     })
-    logActivity('request', who.groupId || senderId, `Filed a material request for "${query}"${who.name ? ` from ${who.name}` : ''}`)
+    logActivity('request', who.groupId || senderId, `Filed a material request for "${title}"${who.name ? ` from ${who.name}` : ''}`)
     return true
   } catch (err) {
     console.error('Could not file the material request:', err.message)
@@ -393,15 +402,64 @@ async function fileRequest(query, senderId, who) {
   }
 }
 
+// Is this file really for that course? Its course code, or the code in its
+// title ("MTH122", "Mth 122").
+function isForCourse(item, code) {
+  const [letters, digits] = code.split(' ')
+  const inTitle = new RegExp(`\\b${letters}\\s?-?${digits}\\b`, 'i')
+  return (item.courseCode || '').replace(/[\s-]+/g, ' ').toUpperCase() === code || inTitle.test(item.title || '')
+}
+
 // Looks one material up: with its type first, then without, then by the
 // bare course code ("GST 101 use of english past questions" -> "GST 101").
+// With a course code, only files for exactly that course count: the
+// library's search also returns near misses (MTH 122 for "MTH 211"), and
+// sending those as if they were the answer would be wrong. No exact match
+// means not found, so it gets requested.
 async function findMaterial(query, type) {
-  let items = await searchLibrary(query, { type })
-  if (items.length === 0 && type) items = await searchLibrary(query)
   const code = courseCodeOnly(query)
-  if (items.length === 0 && code && code !== query) items = await searchLibrary(code, { type })
-  if (items.length === 0 && code && code !== query && type) items = await searchLibrary(code)
-  return items
+  const tries = new Map() // "words|type" -> [words, type], in order, no repeats
+  for (const words of code && code !== query ? [query, code] : [query]) {
+    for (const kind of type ? [type, null] : [null]) tries.set(`${words}|${kind}`, [words, kind])
+  }
+  for (const [words, kind] of tries.values()) {
+    let items = await searchLibrary(words, kind ? { type: kind } : {})
+    if (code) items = items.filter((it) => isForCourse(it, code))
+    if (items.length) return items
+  }
+  return []
+}
+
+// The person's words for one material, without the asking around it.
+// Only asking words: never anything that could start a real title ("The...").
+const ASK_START = /^(hi|hello|hey|please|pls|plz|abeg|biko|i need|i want|i'?m looking for|send me|give me|do you have|does anyone have|anyone has|anybody has|help me with|can i (get|have))\b[\s,:]*/i
+const ASK_END = /[\s,]*\b(please|pls|plz|abeg|biko|thanks|thank you|o|sir|ma)\b[\s.!?]*$/i
+
+function askedName(part) {
+  let name = part.replace(/\s+/g, ' ').trim()
+  for (let i = 0; i < 6 && ASK_START.test(name); i++) name = name.replace(ASK_START, '')
+  for (let i = 0; i < 3 && ASK_END.test(name); i++) name = name.replace(ASK_END, '')
+  return name.replace(/[?.!,;:\s]+$/, '').trim().slice(0, 120)
+}
+
+// Separators that may mean more than one material in a message.
+const MAYBE_SEVERAL = /,|;|&|\+|\n|\band\b|\balso\b|\bplus\b/i
+
+// The separate materials in a message, each in the person's exact words.
+// The AI picks them out (checked word for word against the message); if it
+// can't, or AI is unavailable, the message is split by course codes / list
+// lines; one material -> null.
+async function requestItems(message, fallbackText) {
+  if (MAYBE_SEVERAL.test(message) && aiAllowed()) {
+    aiCount += 1
+    try {
+      const items = await askRequestItems(message)
+      if (items) return items.length > 1 ? items : null
+    } catch (err) {
+      console.error('Could not separate the requested materials:', err.message)
+    }
+  }
+  return splitRequests(fallbackText)
 }
 
 // Words that look like course codes but aren't ("level 200", "year 300").
@@ -449,14 +507,10 @@ async function multiSearchReply(parts, type, senderId, who) {
     for (const part of parts) {
       const query = extractSearchQuery(part)
       if (!query) continue
-      let items = await findMaterial(query, detectType(part) || type)
-      // Asked for a course: only that course's files (not a neighbour like ENG 224).
-      const code = courseCodeOnly(query)
-      const sameCourse = code ? items.filter((it) => (it.courseCode || '').replace(/\s+/g, ' ').toUpperCase() === code) : []
-      if (sameCourse.length) items = sameCourse
-      // Shown and filed in the person's own words (tidied), not the search words.
-      const name = part.replace(/^(please|pls|abeg|i need|i want|send( me)?|do you have|any(one)?( has)?)\b[\s,:]*/gi, '').replace(/[?.!,;:\s]+$/, '').slice(0, 120) || query
-      if (items.length) found.push({ label: code || name, items: items.slice(0, 3) })
+      const items = await findMaterial(query, detectType(part) || type)
+      // Shown and filed in the person's own words, not the search words.
+      const name = askedName(part) || query
+      if (items.length) found.push({ label: name, items: items.slice(0, 3) })
       else missing.push(name)
     }
   } catch (err) {
@@ -493,10 +547,14 @@ async function multiSearchReply(parts, type, senderId, who) {
   return lines.join('\n')
 }
 
+// text = what to look for (the person's message, or the AI's SEARCH words);
+// who.asked = the person's own message, which decides how many materials
+// there are and the exact words each request is filed with.
 async function searchReply(text, senderId, who = {}) {
   const clean = stripMentions(text)
-  const parts = splitRequests(clean)
-  if (parts) return multiSearchReply(parts, detectType(clean), senderId, who)
+  who = { ...who, asked: who.asked || text }
+  const parts = await requestItems(stripMentions(who.asked), clean)
+  if (parts) return multiSearchReply(parts, detectType(stripMentions(who.asked)), senderId, who)
   const ask = parseLevelRequest(clean)
   if (ask) return levelReply(text, ask, senderId)
   const query = extractSearchQuery(clean)
@@ -506,11 +564,14 @@ async function searchReply(text, senderId, who = {}) {
   try {
     const items = await findMaterial(query, type)
     if (items.length === 0) {
-      if (await fileRequest(query, senderId, who)) {
+      // Their own words when it's their message; the AI's search words
+      // otherwise (the full message is attached to the request either way).
+      const name = askedName(clean) || query
+      if (await fileRequest(name, senderId, who)) {
         const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
-        return `I couldn't find "${query}" in the library yet 😔\n\n📝 I've sent a request to the library team for you. Once it's added, ${where} with the link.\n📤 Have it already? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
+        return `I couldn't find "${name}" in the library yet 😔\n\n📝 I've sent a request to the library team for you. Once it's added, ${where} with the link.\n📤 Have it already? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
       }
-      return `I couldn't find "${query}" in the library yet 😔\n\n📝 Request it: ${config.siteUrl}/contribute/request\n📤 Have it? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
+      return `I couldn't find "${name}" in the library yet 😔\n\n📝 Request it: ${config.siteUrl}/contribute/request\n📤 Have it? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
     }
     return formatResults(items)
   } catch (err) {
@@ -551,7 +612,7 @@ async function aiReply(text, { senderName, senderId = '', groupId = null, histor
   try {
     const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience, praying, revealAi })
     // The AI decided the member is asking for a material: look it up for real.
-    if (result.type === 'search') return await resourceReply(result.query, senderId, audience, { name: senderName, groupId })
+    if (result.type === 'search') return await resourceReply(result.query, senderId, audience, { name: senderName, groupId, asked: text })
     // Business or a request for the owner: the direct contact in DM (the AI
     // has talked it through first), an invite to the DM in a group.
     if (result.type === 'contact') return isPrivate ? businessReply() : dmInviteReply()
