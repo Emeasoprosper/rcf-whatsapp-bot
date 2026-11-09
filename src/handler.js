@@ -4,6 +4,7 @@ import { searchLibrary } from './library.js'
 import { botApi } from './backend.js'
 import { logActivity } from './activity.js'
 import { askAi, askChimeIn, askPrayer, askRequestItems } from './ai.js'
+import { getContact, updateContact, learnFromReply } from './contacts.js'
 import { activity, recentChat, inPrayer } from './chatMemory.js'
 import { liveFacts } from './liveSettings.js'
 import { groupSettings, studyTipOn } from './groups.js'
@@ -432,7 +433,7 @@ async function findMaterial(query, type) {
 
 // The person's words for one material, without the asking around it.
 // Only asking words: never anything that could start a real title ("The...").
-const ASK_START = /^(hi|hello|hey|please|pls|plz|abeg|biko|i need|i want|i'?m looking for|send me|give me|do you have|does anyone have|anyone has|anybody has|help me with|can i (get|have))\b[\s,:]*/i
+const ASK_START = /^(ok|okay|alright|hi|hello|hey|please|pls|plz|abeg|biko|i need|i want|i'?m looking for|send me|give me|do you have|does anyone have|anyone has|anybody has|help me with|can i (get|have))\b[\s,:]*/i
 const ASK_END = /[\s,]*\b(please|pls|plz|abeg|biko|thanks|thank you|o|sir|ma)\b[\s.!?]*$/i
 
 function askedName(part) {
@@ -606,11 +607,32 @@ function humanFallback(text, { tired = false } = {}) {
   return tired ? `${pickLine(TIRED_LINES)}${config.siteUrl}` : pickLine(BUSY_LINES)
 }
 
-async function aiReply(text, { senderName, senderId = '', groupId = null, history, isPrivate = false, audience = 'campus', praying = false, revealAi = true }) {
+// What he remembers about this person, for the AI. In a private chat the
+// WhatsApp display name isn't used until they've told him their name
+// themselves (like meeting someone), so the AI doesn't greet them by it.
+function memberFor(senderId, extra = {}) {
+  const c = getContact(senderId)
+  return { name: c?.name || '', address: c?.address || '', title: c?.title || '', ...extra }
+}
+
+async function aiReply(text, { senderName, senderId = '', groupId = null, history, isPrivate = false, audience = 'campus', praying = false, revealAi = true, member = null }) {
   if (!aiAllowed()) return humanFallback(text, { tired: true })
   aiCount += 1
   try {
-    const result = await askAi({ question: stripMentions(text), senderName, history, knowledgeEntries: allKnowledge(), isPrivate, audience, praying, revealAi })
+    const known = member || memberFor(senderId)
+    const result = await askAi({
+      question: stripMentions(text),
+      senderName: isPrivate ? known.name || 'them' : known.name || senderName,
+      history,
+      knowledgeEntries: allKnowledge(),
+      isPrivate,
+      audience,
+      praying,
+      revealAi,
+      member: known,
+    })
+    // Whatever they told him about themselves (name, Sir/Ma, title).
+    learnFromReply(senderId, result.member)
     // The AI decided the member is asking for a material: look it up for real.
     if (result.type === 'search') return await resourceReply(result.query, senderId, audience, { name: senderName, groupId, asked: text })
     // Business or a request for the owner: the direct contact in DM (the AI
@@ -696,11 +718,47 @@ export async function handlePrivateMessage(msg) {
       : null
   }
 
-  const reply = looksLikeResourceRequest(text) || looksLikeLevelRequest(text, { tagged: true })
-    ? await resourceReply(text, msg.senderId, 'campus', { name: msg.senderName })
-    : await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], isPrivate: true })
+  // Getting to know them: the first time, he asks their name like a person
+  // would; their next message is read as the answer (and he never asks
+  // again, even if they skip it).
+  const contact = getContact(msg.senderId)
+  const askName = !contact
+  const justAskedName = Boolean(contact && contact.askedAt && !contact.name && !contact.nameTurnDone)
+  if (askName) updateContact(msg.senderId, { askedAt: Date.now() })
+  else if (justAskedName) updateContact(msg.senderId, { nameTurnDone: true })
+
+  let reply
+  if (looksLikeResourceRequest(text) || looksLikeLevelRequest(text, { tagged: true })) {
+    reply = await resourceReply(text, msg.senderId, 'campus', { name: contact?.name || msg.senderName })
+    // Straight to business on the first message: help first, then ask.
+    if (askName && reply) reply += `\n\n${pickLine(NAME_ASKS)}`
+  } else {
+    reply = await aiReply(text, {
+      senderName: msg.senderName,
+      senderId: msg.senderId,
+      history: msg.history || [],
+      isPrivate: true,
+      member: memberFor(msg.senderId, { askName, justAskedName }),
+    })
+    // Backup for a plain answer like "Emeka" or "I'm Tolu": kept only when
+    // Bro Paul's own reply greeted them by that same name.
+    if (justAskedName && reply && !getContact(msg.senderId)?.name) {
+      const name = nameAnswer(text)
+      if (name && reply.toLowerCase().includes(name.toLowerCase())) updateContact(msg.senderId, { name })
+    }
+  }
   return reply ? reply.slice(0, 1800) : null
 }
+
+// "Emeka", "I'm Tolu", "my name is Ada Obi", "na Seun": the name, or null.
+const NOT_NAMES = /^(hi|hello|hey|ok|okay|yes|no|nope|why|what|who|thanks|thank you|fine|good|cool|sure|lol|hmm|morning|evening|afternoon|nothing|me|guess)$/i
+function nameAnswer(text) {
+  const m = text.trim().match(/^(?:(?:i'?m|i am|my name is|my name'?s|it'?s|na|call me|this is)\s+)?([\p{L}][\p{L}'-]{1,20}(?:\s[\p{L}][\p{L}'-]{1,20})?)\s*[.!😊🙂😄]*$/iu)
+  if (!m || NOT_NAMES.test(m[1])) return null
+  return m[1].replace(/\b\p{L}/gu, (c) => c.toUpperCase())
+}
+
+const NAME_ASKS = ['By the way, who I dey talk with? 😊', "Btw what's your name? 😊", 'Who am I chatting with sef? 😄']
 
 // msg = { id, groupId, senderId, senderName, text, isGroup, fromMe, mentionedBot, repliedToBot, history }
 // history = recent group messages (oldest first), not including this one.

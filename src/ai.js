@@ -193,9 +193,47 @@ export async function askRequestItems(message) {
   return [...new Set(exact)].slice(0, 8)
 }
 
-// Returns { type: 'reply', text }, { type: 'search', query } or { type: 'contact' }.
+// Getting to know people like a person would. member = what he remembers
+// about them ({ name, address, title }) plus where the chat is:
+// askName (first chat, name unknown) or justAskedName (he asked last time).
+const MEMBER_RULES = `
+
+Knowing who you're talking to:
+- How to address people: with students and peers stay casual ("boss", their name, "my guy"). Use "Sir" or "Ma" only for someone who has shown they're a pastor, lecturer, doctor, staff, a parent, older, an executive or otherwise prominent, or who asked to be addressed that way; and use Sir or Ma only according to what they themselves made clear (e.g. "Mrs", "Mr", "as a mother", "as a father", "I'm a woman", "call me Ma"). Never guess anyone's gender or status from their name or their WhatsApp name: "Dr Okoro" or "Pastor Ade" alone doesn't tell you if it's a man or a woman. If someone is clearly senior but hasn't made that clear, use their title ("Nice meeting you Doctor", "Pastor") or just be respectful, without Sir or Ma.
+- REQUIRED: whenever the member's message tells you their name, or something that shows how to address them (title or role like Pastor, Dr, lecturer, staff, parent; Mrs/Mr/Miss; "I'm a lady"; "call me Ma"), you MUST end your reply with this on its own last line: [[member name="..." address="sir|ma|" title="..."]] filled with only what they told you (leave the rest empty; address only "sir" or "ma" when they made it clear, otherwise empty). Example: they say "I'm Chioma" -> last line [[member name="Chioma" address="" title=""]]. Never mention or explain this line.`
+
+function memberNote(member) {
+  if (!member) return ''
+  const lines = []
+  if (member.name) lines.push(`Their name is ${clean(member.name, 40)} (they told you). Use it now and then, not in every message.`)
+  if (member.title) lines.push(`Their title or role: ${clean(member.title, 20)}.`)
+  if (member.address === 'sir') lines.push('Address him respectfully as Sir.')
+  if (member.address === 'ma') lines.push('Address her respectfully as Ma.')
+  if (member.askName) {
+    lines.push(
+      "This is your first chat with this person and you don't know their name yet. Reply to what they said, short and human, and casually ask their name in the same message, the way a person would (e.g. \"who I dey talk with sef?\" or \"what's your name by the way?\"). Never sound like a form."
+    )
+  }
+  if (member.justAskedName) {
+    lines.push(
+      "In your last message you asked their name. If this message gives it, react like a real person meeting someone new: short and warm, e.g. \"Nice meeting you boss 🙌\" or \"Ahh Tolu! nice one\", then carry on naturally. Never say things like \"Thank you for sharing your name\" or \"Nice to meet you! How can I assist you today?\". If they didn't give it, don't ask again."
+    )
+  }
+  return lines.length ? `<about_member>\n${lines.join('\n')}\n</about_member>\n` : ''
+}
+
+// Pulls out (and removes) the [[member ...]] line.
+function takeMemberTag(text) {
+  const m = text.match(/\[\[\s*member\b([^\]]*)\]\]/i)
+  if (!m) return { text, member: null }
+  const attr = (k) => (m[1].match(new RegExp(`${k}\\s*=\\s*"([^"]*)"`, 'i')) || [])[1] || ''
+  const member = { name: attr('name').trim(), address: attr('address').trim().toLowerCase(), title: attr('title').trim() }
+  return { text: text.replace(m[0], '').trim(), member }
+}
+
+// Returns { type: 'reply', text, member? }, { type: 'search', query } or { type: 'contact' }.
 // isPrivate = a one-to-one chat with the bot number instead of a group.
-export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [], isPrivate = false, audience = 'campus', praying = false, revealAi = true }) {
+export async function askAi({ question, senderName = '', history = [], knowledgeEntries = [], isPrivate = false, audience = 'campus', praying = false, revealAi = true, member = null }) {
   const info = knowledgeEntries.length
     ? knowledgeEntries.map((e) => `- ${e.title}: ${e.text}`).join('\n')
     : '(none provided)'
@@ -203,13 +241,14 @@ export async function askAi({ question, senderName = '', history = [], knowledge
     ? history.map((h) => `${clean(h.name, 40)}: ${clean(h.text, 300)}`).join('\n')
     : '(no earlier messages)'
 
-  const text = await callGemini({
+  const raw = await callGemini({
     systemInstruction: {
       parts: [
         {
-          text: isPrivate
-            ? SYSTEM_RULES + PRIVATE_RULES + STICKER_RULE
-            : SYSTEM_RULES + (AUDIENCE_RULES[audience] || '') + (revealAi ? '' : QUIET_AI_RULE) + (praying ? PRAYER_NOW_RULE : STICKER_RULE),
+          text:
+            (isPrivate
+              ? SYSTEM_RULES + PRIVATE_RULES + STICKER_RULE
+              : SYSTEM_RULES + (AUDIENCE_RULES[audience] || '') + (revealAi ? '' : QUIET_AI_RULE) + (praying ? PRAYER_NOW_RULE : STICKER_RULE)) + MEMBER_RULES,
         },
       ],
     },
@@ -221,6 +260,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
             text:
               `<approved_info>\n${info}\n</approved_info>\n` +
               `<recent_chat>\n${chat}\n</recent_chat>\n` +
+              memberNote(member) +
               `<member_message from="${clean(senderName, 40) || 'Member'}">\n${clean(question, 800)}\n</member_message>`,
           },
         ],
@@ -230,11 +270,12 @@ export async function askAi({ question, senderName = '', history = [], knowledge
     generationConfig: { temperature: 0.75, maxOutputTokens: 800 },
   })
 
-  const search = text.match(/^\s*SEARCH:\s*(.+)$/im)
+  const { text: answer, member: learned } = takeMemberTag(raw)
+  const search = answer.match(/^\s*SEARCH:\s*(.+)$/im)
   // Several materials come as "a | b | c" (see the SEARCH rule), so allow room.
-  if (search) return { type: 'search', query: search[1].trim().slice(0, 400) }
-  if (/^\s*CONTACT\s*\.?\s*$/i.test(text)) return { type: 'contact' }
-  return { type: 'reply', text: humanTouch(text) }
+  if (search) return { type: 'search', query: search[1].trim().slice(0, 400), member: learned }
+  if (/^\s*CONTACT\s*\.?\s*$/i.test(answer)) return { type: 'contact', member: learned }
+  return { type: 'reply', text: humanTouch(answer), member: learned }
 }
 
 // Last touches people would never type in a chat: long dashes joining
