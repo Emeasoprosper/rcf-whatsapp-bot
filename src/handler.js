@@ -393,19 +393,118 @@ async function fileRequest(query, senderId, who) {
   }
 }
 
+// Looks one material up: with its type first, then without, then by the
+// bare course code ("GST 101 use of english past questions" -> "GST 101").
+async function findMaterial(query, type) {
+  let items = await searchLibrary(query, { type })
+  if (items.length === 0 && type) items = await searchLibrary(query)
+  const code = courseCodeOnly(query)
+  if (items.length === 0 && code && code !== query) items = await searchLibrary(code, { type })
+  if (items.length === 0 && code && code !== query && type) items = await searchLibrary(code)
+  return items
+}
+
+// Words that look like course codes but aren't ("level 200", "year 300").
+const NOT_A_CODE = /^(level|year|page|room|chapter|class|hall|block|lv|lvl)$/i
+const MAX_ITEMS = 8
+
+// Several materials asked for in one message, as separate searches:
+// - the AI's "SEARCH: a | b | c",
+// - two or more course codes, each with the words after it
+//   ("MTH 211 calculus, CSC 224 data structures"),
+// - a list with one material per line ("1. Atomic Habits\n2. ...").
+// Returns the list, or null when it's really one request.
+function splitRequests(text) {
+  if (text.includes('|')) {
+    const parts = text.split('|').map((p) => p.trim()).filter(Boolean)
+    return parts.length > 1 ? parts.slice(0, MAX_ITEMS) : null
+  }
+  const codes = [...text.matchAll(new RegExp(COURSE_CODE.source, 'gi'))].filter((m) => !NOT_A_CODE.test(m[1]))
+  const distinct = new Set(codes.map((m) => `${m[1].toUpperCase()} ${m[2]}`))
+  if (distinct.size > 1) {
+    const seen = new Set()
+    const parts = []
+    codes.forEach((m, i) => {
+      const code = `${m[1].toUpperCase()} ${m[2]}`
+      if (seen.has(code)) return
+      seen.add(code)
+      const end = i + 1 < codes.length ? codes[i + 1].index : text.length
+      // The code plus its title, without joining words left at the end.
+      const words = text.slice(m.index + m[0].length, end).replace(/(,|&|\band\b|\bplus\b|\balso\b|\n|\d+[.)])+\s*$/gi, '').trim()
+      parts.push(`${code} ${words}`.trim())
+    })
+    return parts.slice(0, MAX_ITEMS)
+  }
+  const lines = text.split(/\n+/).map((l) => l.replace(/^\s*(\d+[.)]|[-•*])\s*/, '').trim()).filter((l) => l.length >= 3)
+  const listed = text.split(/\n+/).filter((l) => /^\s*(\d+[.)]|[-•*])\s+\S/.test(l)).length
+  return listed >= 2 && lines.length >= 2 ? lines.slice(0, MAX_ITEMS) : null
+}
+
+// Several materials: what's in the library comes back under each name, and
+// every missing one is filed as its own request for the admins.
+async function multiSearchReply(parts, type, senderId, who) {
+  const found = []
+  const missing = []
+  try {
+    for (const part of parts) {
+      const query = extractSearchQuery(part)
+      if (!query) continue
+      let items = await findMaterial(query, detectType(part) || type)
+      // Asked for a course: only that course's files (not a neighbour like ENG 224).
+      const code = courseCodeOnly(query)
+      const sameCourse = code ? items.filter((it) => (it.courseCode || '').replace(/\s+/g, ' ').toUpperCase() === code) : []
+      if (sameCourse.length) items = sameCourse
+      // Shown and filed in the person's own words (tidied), not the search words.
+      const name = part.replace(/^(please|pls|abeg|i need|i want|send( me)?|do you have|any(one)?( has)?)\b[\s,:]*/gi, '').replace(/[?.!,;:\s]+$/, '').slice(0, 120) || query
+      if (items.length) found.push({ label: code || name, items: items.slice(0, 3) })
+      else missing.push(name)
+    }
+  } catch (err) {
+    console.error('Library search failed:', err.message)
+    return 'The library is slow to respond right now. Please try again in a minute.'
+  }
+  if (found.length === 0 && missing.length === 0) return 'Tell me the course codes or titles, e.g. *MTH 211 and CSC 224 past questions*.'
+
+  const filed = []
+  for (const query of missing) if (await fileRequest(query, senderId, who)) filed.push(query)
+
+  const lines = []
+  if (found.length) {
+    lines.push("Here's what I found in the RCF library:")
+    for (const { label, items } of found) {
+      lines.push('', `📘 *${label}*`)
+      items.forEach((item, i) => {
+        const extra = [item.author, item.courseCode].filter(Boolean).join(' · ')
+        lines.push(`${i + 1}. ${item.title}${extra ? ` — ${extra}` : ''}\n${item.url}`)
+      })
+    }
+  }
+  if (missing.length) {
+    lines.push('', `😔 Not in the library yet: ${missing.map((q) => `*${q}*`).join(', ')}`)
+    if (filed.length === missing.length) {
+      const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
+      lines.push(`📝 I've sent ${missing.length > 1 ? 'a separate request for each one' : 'a request'} to the library team. Once ${missing.length > 1 ? "they're" : "it's"} added, ${where} with the link.`)
+    } else {
+      lines.push(`📝 Request ${missing.length > 1 ? 'them' : 'it'}: ${config.siteUrl}/contribute/request`)
+    }
+    lines.push(`📤 Have any of them? Please upload so others can benefit: ${config.siteUrl}/contribute/submit`)
+  }
+  if (found.length) lines.push('', 'Sign in with your library account to open them.')
+  return lines.join('\n')
+}
+
 async function searchReply(text, senderId, who = {}) {
-  const ask = parseLevelRequest(stripMentions(text))
+  const clean = stripMentions(text)
+  const parts = splitRequests(clean)
+  if (parts) return multiSearchReply(parts, detectType(clean), senderId, who)
+  const ask = parseLevelRequest(clean)
   if (ask) return levelReply(text, ask, senderId)
-  const query = extractSearchQuery(stripMentions(text))
+  const query = extractSearchQuery(clean)
   if (!query) return 'Tell me the course code or the title, e.g. *GST 101 past questions*.'
 
   const type = detectType(text)
   try {
-    let items = await searchLibrary(query, { type })
-    if (items.length === 0 && type) items = await searchLibrary(query)
-    // "GST 101 use of english past questions" -> try just "GST 101".
-    const code = courseCodeOnly(query)
-    if (items.length === 0 && code && code !== query) items = await searchLibrary(code)
+    const items = await findMaterial(query, type)
     if (items.length === 0) {
       if (await fileRequest(query, senderId, who)) {
         const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"

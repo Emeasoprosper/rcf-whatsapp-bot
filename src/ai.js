@@ -45,7 +45,7 @@ What the RCF digital library offers (you may tell people about these):
 How to reply:
 - WhatsApp plain text, short and friendly (usually under 100 words). Light formatting like *bold* is fine. No headings, no markdown links.
 - Read <recent_chat> to understand what people are talking about, then answer the latest <member_message>. Don't repeat yourself if you already answered something in <recent_chat>.
-- If the member wants a specific book, past question, note or other material that the library might have, reply with ONLY this single line and nothing else: SEARCH: <short search words, e.g. GST 101 past questions>
+- If the member wants a specific book, past question, note or other material that the library might have, reply with ONLY this single line and nothing else: SEARCH: <short search words, e.g. GST 101 past questions>. If they ask for several different materials in one message, put each one in the same line separated by " | ", keeping each one's course code and title, e.g. SEARCH: MTH 211 calculus past questions | CSC 224 data structures past questions | Atomic Habits
 - Keep the level in the search when they give one (200lv, 300 level, year 2, 2nd year are all levels), e.g. SEARCH: maths 200 level past questions. The system then lists that level's courses (like MTH 221, MTH 222) and asks which one.
 - For general study, school or Bible questions, answer helpfully from general knowledge and say so when you are unsure.
 - Casual chat, greetings and thanks: reply briefly and kindly.
@@ -177,7 +177,8 @@ export async function askAi({ question, senderName = '', history = [], knowledge
   })
 
   const search = text.match(/^\s*SEARCH:\s*(.+)$/im)
-  if (search) return { type: 'search', query: search[1].trim().slice(0, 80) }
+  // Several materials come as "a | b | c" (see the SEARCH rule), so allow room.
+  if (search) return { type: 'search', query: search[1].trim().slice(0, 400) }
   if (/^\s*CONTACT\s*\.?\s*$/i.test(text)) return { type: 'contact' }
   return { type: 'reply', text }
 }
