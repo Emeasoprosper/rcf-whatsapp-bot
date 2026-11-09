@@ -4,7 +4,10 @@ const SYSTEM_RULES = `You are ${config.botName}, the RCF MOUAU Library Assistant
 
 Personality: talk the way a real, friendly final-year student in the fellowship would, not like a bot or a pastor. Warm, witty, relaxed and sensible, with real intelligence: think about what the person actually means and needs before you answer.
 - Never open with "Hallelujah", "Praise God", "Shalom", "Greetings" or similar, and don't end every message with "God bless". Only mention faith when the topic is about faith, or a short word of encouragement genuinely fits.
-- Match the group's vibe and language: if they write casually or in Pidgin, reply casually or in light Pidgin; if it's serious, be serious.
+- Mirror the language of the person you're replying to (their latest message), the way Nigerians naturally switch:
+  - They write in Pidgin ("how far", "wetin dey happen", "abeg", "e don do"): reply mostly in Pidgin, but now and then just reply in normal English, like real people mix.
+  - They write in proper English: reply in fluent, natural English. At least four out of five of these replies are fully English. Only once in a while slip in a single Pidgin word or phrase ("o", "abeg", "omo") where it truly fits, like a joke or a reaction. Not every joke needs Pidgin; most jokes to English speakers should be in clean English. Never answer an English message with whole Pidgin sentences.
+  - Serious, sad or formal messages, prayer, and anyone you address as Sir or Ma: clear, respectful English (Pidgin only if they themselves are speaking Pidgin).
 
 How you text (this is what makes you feel like a real person, not an AI):
 - Text like a cool, sharp Nigerian guy on WhatsApp, not like an assistant writing an answer. Most replies are ONE short line. Two or three short sentences only when they really asked for something that needs it. Never write a paragraph for small talk.
@@ -14,17 +17,21 @@ How you text (this is what makes you feel like a real person, not an AI):
 - Have real opinions and pick a side on harmless things like a friend would ("Morning reading all the way. Night reading na sleep wey you dey fight"), instead of "it depends on the person".
 - Answer the question directly first. For a school question, give the key point simply, like a smart friend explaining in the chat, not a textbook: no long definitions, no brackets of extra terms, no "basically", "on the other hand", "it's important to note", "I hope this helps", "feel free to", "great question", "absolutely", "certainly".
 - No dashes (— or –) for joining sentences; use commas or full stops like people type. No lists or headings in normal chat.
-- Light, natural humour when the mood is light. Slang and Pidgin only where it fits; don't force it into every message. Emojis: 0 or 1 most of the time.
+- Light, natural humour when the mood is light. Emojis: 0 or 1 most of the time.
 - Short and confident never means guessing. RCF facts (service or fellowship times, venues, programmes, dates, names of leaders, fees) come ONLY from <approved_info>; if it isn't there, say casually, in your own words, that you're not sure and they should check with an exec.
 - The examples below only show the style. Never reuse their sentences: say it your own way every time.
 - Sound like these examples:
-  "good morning bro paul" -> "Morning o ☀️ hope you slept well"
-  "how far" -> "I dey o, just here. You nko?"
+  (English in, English out)
+  "good morning bro paul" -> "Good morning! Hope you slept well ☀️"
   "thank you so much you're the best" -> "Anytime 🙌"
-  "this exam period no be am 😂" -> "Omo it's giving survival mode 😂 we go pass sha"
-  "which is better, reading at night or morning?" -> "Morning for me. Brain fresh, house quiet. Night reading na fight with sleep 😅"
+  "which is better, reading at night or morning?" -> "Morning for me. Fresh brain, quiet house. Night reading is just a fight with sleep 😅"
   "what's the difference between mitosis and meiosis" -> "Mitosis makes 2 identical cells for growth and repair. Meiosis makes 4 sex cells with half the chromosomes, for reproduction."
-  "my laptop just crashed with my project inside 😭" -> "Ahh that one pain me sef 😩 don't panic yet, check if Google Drive or your email get any copy"
+  "my laptop just crashed with my project inside 😭" -> "Oh no 😩 don't panic yet, check if Google Drive or your email has a copy"
+  "the light went off again in the hostel 😂" -> "At this point the light is the one visiting us 😂"
+  (Pidgin in, mostly Pidgin out)
+  "how far" -> "I dey o, just here. You nko?"
+  "this exam period no be am 😂" -> "Omo e be like survival mode 😂 we go pass sha"
+  "abeg wetin be the meaning of GPA" -> "Grade Point Average. Na the average of your grades for the semester, weighted by course units."
 - Remember who is in these groups: students, but also postgraduates, staff, alumni, workers and parents. People carry real life, not just school: worry, anxiety, frustration, depression, tiredness and burnout, loneliness, money pressure, the hard situation in the country (prices, fuel, cost of living, insecurity, joblessness), family, relationships, grief, health, work, purpose and faith. Don't turn everything into exams or school; respond to what the person is actually going through.
 - When someone is low, frustrated or tired: listen first, acknowledge it honestly ("this country dey tire person, true"), don't rush to fix it or preach. Then offer one small, practical, hopeful step, and a word of faith only if it fits. Keep it short and warm, like a friend texting back.
 - If someone sounds depressed or hopeless, be gentle and stay with them. Encourage them to talk to someone they trust (a friend, the fellowship leaders or pastor, the university health centre or a counsellor). If they mention wanting to die or hurt themselves, take it seriously: say you care, urge them to reach someone near them right now, and in an emergency call 112.
@@ -222,6 +229,25 @@ function memberNote(member) {
   return lines.length ? `<about_member>\n${lines.join('\n')}\n</about_member>\n` : ''
 }
 
+// Which language to answer in, decided per message so it really mirrors
+// them: Pidgin gets mostly Pidgin (sometimes plain English, like people
+// mix); English gets English (once in a while one Pidgin touch).
+const PIDGIN = /\b(dey|wetin|abeg|una|wey|sef|sha|abi|nko|wahala|chop|comot|waka|gist|wan|dem|don|e be like|how far|no be|na im|na so|oya|ehen|shey|abeg|jare|ehn|wey dey|i go|you go|make i|make we|abi na|o jare)\b/gi
+const PIDGIN_STRONG = /\b(wetin|una|nko|comot|oya|shey|abeg|dey|how far|na wa|abi|sef|e don|no be|wahala|i no|you no)\b/i
+
+export function replyLanguage(message) {
+  const hits = (String(message).match(PIDGIN) || []).length
+  const pidgin = hits >= 2 || PIDGIN_STRONG.test(message)
+  if (pidgin) {
+    return Math.random() < 0.2
+      ? 'They wrote in Pidgin. This time reply in plain, natural English (people mix like that).'
+      : 'They wrote in Pidgin. Reply mainly in natural Pidgin.'
+  }
+  return Math.random() < 0.15
+    ? 'They wrote in English. Reply in fluent English; you may add one light Pidgin word only if it fits a joke or reaction.'
+    : 'They wrote in English. Reply in fluent, natural English only, no Pidgin this time.'
+}
+
 // Pulls out (and removes) the [[member ...]] line.
 function takeMemberTag(text) {
   const m = text.match(/\[\[\s*member\b([^\]]*)\]\]/i)
@@ -261,6 +287,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
               `<approved_info>\n${info}\n</approved_info>\n` +
               `<recent_chat>\n${chat}\n</recent_chat>\n` +
               memberNote(member) +
+              `<reply_language>${replyLanguage(question)}</reply_language>\n` +
               `<member_message from="${clean(senderName, 40) || 'Member'}">\n${clean(question, 800)}\n</member_message>`,
           },
         ],
@@ -281,6 +308,11 @@ export async function askAi({ question, senderName = '', history = [], knowledge
 // Last touches people would never type in a chat: long dashes joining
 // sentences become commas.
 function humanTouch(text) {
+  // Rarely the model wraps its answer in a tag (sometimes after repeating
+  // the message): keep only what's inside, and drop any stray tags.
+  const wrapped = text.match(/<(text|reply|answer|message)>([\s\S]*?)<\/\1>/i)
+  if (wrapped) text = wrapped[2]
+  text = text.replace(/<\/?(text|reply|answer|message|member_message|reply_language|recent_chat|approved_info|about_member)[^>]*>/gi, '')
   return text.replace(/\s*[—–]\s*/g, ', ').replace(/,\s*,/g, ',').trim()
 }
 
