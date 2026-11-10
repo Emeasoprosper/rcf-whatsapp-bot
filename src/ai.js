@@ -365,9 +365,37 @@ export async function describeSticker(png) {
   return { mood: mood.toLowerCase().replace(/[^a-z]/g, ''), emoji: emoji.slice(0, 8), description: rest.join(' ').slice(0, 120) }
 }
 
+// A birthday flyer someone shared: whose birthday is it? Reads the name
+// written on the image (with the caption as a hint). Returns the name as
+// written, or '' when no celebrant name is clearly shown. Never guesses.
+export async function askFlyerCelebrant(image, mimeType = 'image/jpeg', caption = '') {
+  const text = await callGemini({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType, data: Buffer.from(image).toString('base64') } },
+          {
+            text:
+              `This picture was posted in a WhatsApp group${caption ? ` with the caption: "${clean(caption, 300)}"` : ''}.\n` +
+              'If it is a birthday flyer or birthday post, whose birthday is it? Reply with ONLY the celebrant\'s name exactly as written on the picture or caption (with any title written there, e.g. "Pastor A. Houston", "Sis. Grace Obi"). ' +
+              'If no celebrant name is clearly written, or it is not a birthday picture, reply with only: NONE. Never guess from faces.',
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0, maxOutputTokens: 40 },
+  })
+  const name = text.split('\n')[0].replace(/["*]/g, '').trim()
+  if (!name || /^none\b/i.test(name) || name.length > 50 || !/\p{L}/u.test(name)) return ''
+  return name
+}
+
 // Writes a short birthday wish. The celebrant is written as NAME so the
-// caller can swap in a real @mention.
-export async function askBirthdayWish({ celebrant, history = [] }) {
+// caller can swap in a real @mention or their name.
+// celebrant = their name if known; known = false when it isn't clear who
+// it is (then NAME becomes "our celebrant", and no one is guessed).
+export async function askBirthdayWish({ celebrant, history = [], known = true }) {
   const chat = history.map((h) => `${clean(h.name, 40)}: ${clean(h.text, 300)}`).join('\n')
   const text = await callGemini({
     systemInstruction: {
@@ -376,7 +404,9 @@ export async function askBirthdayWish({ celebrant, history = [] }) {
           text: `${SYSTEM_RULES}
 
 Special task: people in the group are wishing someone a happy birthday. Write ${config.botName}'s own birthday wish for them, like a warm friend in the fellowship would.
-- Write the celebrant as the exact word NAME (it gets replaced with a tag). ${celebrant ? `Their name is roughly "${clean(celebrant, 40)}", but still write NAME.` : ''}
+- Write the celebrant as the exact word NAME (it gets replaced with their tag or name). ${celebrant ? `Their name is "${clean(celebrant, 40)}", but still write NAME.` : ''}${known ? '' : ' It is not clear who the celebrant is, so NAME becomes "our celebrant": don\'t guess anyone\'s name, and never treat the person who posted the birthday flyer or wish as the celebrant.'}
+- The person who posts a birthday flyer or a birthday wish for someone is usually NOT the celebrant: don't congratulate them.
+- Address the celebrant as Sir or Ma only if the group's messages already make that clear; otherwise neither.
 - One to three short sentences, personal and joyful, 1 to 3 emojis (🎂🎉🥳🤍 etc).
 - A short prayer or blessing fits well on birthdays, but keep it fresh, not generic church phrases, and don't copy what others in <recent_chat> already said.
 - Reply with only the wish.`,

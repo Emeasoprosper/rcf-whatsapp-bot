@@ -366,11 +366,30 @@ async function onMessage(sock, m) {
 
   if (!fromMe && config.birthdayWishes && groupSettings(jid).birthdays && isBirthdayWish(text)) {
     if (shouldReact(jid, { text, birthday: true })) await react()
+    // What the wish replies to (a flyer someone posted, or the person's own
+    // news), so Bro Paul wishes the real celebrant, not whoever posted.
+    const quotedMsg = ctx.quotedMessage ? unwrap(ctx.quotedMessage) : null
+    const quotedSource = quotedMsg ? { key: { remoteJid: jid, id: ctx.stanzaId, participant: ctx.participant }, message: ctx.quotedMessage } : null
+    const readPicture = (source, image) => async () => ({
+      buffer: await downloadMediaMessage(source, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }),
+      mimetype: image.mimetype || 'image/jpeg',
+    })
     handleBirthdayWish({
       groupId: jid,
       text,
       mentioned: mentioned.filter((j) => !ids.includes(bareId(j))),
-      quotedParticipant: ctx.quotedMessage ? ctx.participant : null,
+      quoted: quotedMsg
+        ? {
+            id: ctx.stanzaId,
+            author: ctx.participant,
+            text: readText(quotedMsg),
+            mentions: (readContext(quotedMsg).mentionedJid || []).filter((j) => !ids.includes(bareId(j))),
+            hasImage: Boolean(quotedMsg.imageMessage),
+            readImage: quotedMsg.imageMessage ? readPicture(quotedSource, quotedMsg.imageMessage) : null,
+          }
+        : null,
+      ownImage: msg.imageMessage ? readPicture(m, msg.imageMessage) : null,
+      messageId: m.key.id,
       senderId,
       send: async (content) => {
         const live = currentSock
