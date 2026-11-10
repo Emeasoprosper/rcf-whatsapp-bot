@@ -42,7 +42,7 @@ async function readFlyer(id, readImage, caption) {
     const img = await readImage()
     if (img) name = await askFlyerCelebrant(img.buffer, img.mimetype, caption)
     // Flyers are often in capitals: "A. HOUSTON" -> "A. Houston".
-    if (name && name === name.toUpperCase()) name = name.toLowerCase().replace(/(^|[\s.'-])(\p{L})/gu, (m, p, c) => p + c.toUpperCase())
+    if (name && name === name.toUpperCase()) name = name.toLowerCase().replace(/(^|[\s.'(-])(\p{L})/gu, (m, p, c) => p + c.toUpperCase())
   } catch (err) {
     console.error('Could not read the birthday flyer:', err.message)
   }
