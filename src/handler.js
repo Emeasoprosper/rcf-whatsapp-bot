@@ -383,7 +383,8 @@ async function resourceReply(text, senderId = '', audience = 'campus', who = {})
 // message, attached so the admins see exactly what was asked.
 // People often ask the admins to just send the file "raw" in the chat. That
 // isn't how the library works, so every filed request says so up front.
-const NO_RAW_FILE_NOTE = "📥 You'll get a library link instead of the raw file. Download it in the app from that link and you can read it offline with no data."
+const NO_RAW_FILE_NOTE =
+  "💡 Instead of a file in the chat, you'll get a library link, and honestly it's the better deal: download it once in the app and it's yours to read anytime, even with your data off. It won't eat your phone storage or get lost in chats. Any trouble at all, just message me and I'll walk you through it 🤝"
 
 async function fileRequest(title, senderId, who) {
   if (!config.botApiKey || !senderId || title.length < 2) return false
