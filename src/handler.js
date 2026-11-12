@@ -381,6 +381,10 @@ async function resourceReply(text, senderId = '', audience = 'campus', who = {})
 // false if the backend couldn't take it, so the reply falls back to links.
 // title = the material in the person's own words; who.asked = their whole
 // message, attached so the admins see exactly what was asked.
+// People often ask the admins to just send the file "raw" in the chat. That
+// isn't how the library works, so every filed request says so up front.
+const NO_RAW_FILE_NOTE = "📥 You'll get a library link instead of the raw file. Download it in the app from that link and you can read it offline with no data."
+
 async function fileRequest(title, senderId, who) {
   if (!config.botApiKey || !senderId || title.length < 2) return false
   try {
@@ -539,6 +543,7 @@ async function multiSearchReply(parts, type, senderId, who) {
     if (filed.length === missing.length) {
       const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
       lines.push(`📝 I've sent ${missing.length > 1 ? 'a separate request for each one' : 'a request'} to the library team. Once ${missing.length > 1 ? "they're" : "it's"} added, ${where} with the link.`)
+      lines.push(NO_RAW_FILE_NOTE)
     } else {
       lines.push(`📝 Request ${missing.length > 1 ? 'them' : 'it'}: ${config.siteUrl}/contribute/request`)
     }
@@ -570,7 +575,7 @@ async function searchReply(text, senderId, who = {}) {
       const name = askedName(clean) || query
       if (await fileRequest(name, senderId, who)) {
         const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
-        return `I couldn't find "${name}" in the library yet 😔\n\n📝 I've sent a request to the library team for you. Once it's added, ${where} with the link.\n📤 Have it already? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
+        return `I couldn't find "${name}" in the library yet 😔\n\n📝 I've sent a request to the library team for you. Once it's added, ${where} with the link.\n${NO_RAW_FILE_NOTE}\n📤 Have it already? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
       }
       return `I couldn't find "${name}" in the library yet 😔\n\n📝 Request it: ${config.siteUrl}/contribute/request\n📤 Have it? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
     }
