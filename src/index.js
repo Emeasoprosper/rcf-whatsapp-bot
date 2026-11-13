@@ -22,6 +22,7 @@ import { handleBirthdayWish } from './birthday.js'
 import { initState, getState, setState } from './state.js'
 import { startLiveSettings } from './liveSettings.js'
 import { startActivityLog, logActivity } from './activity.js'
+import { handleIncomingMaterial, completePendingMaterial } from './materials.js'
 
 const QR_FILE = 'qr.png'
 const GROUP_REFRESH_MS = 60 * 1000
@@ -48,6 +49,7 @@ function readText(msg) {
     msg.imageMessage?.caption ||
     msg.videoMessage?.caption ||
     msg.documentMessage?.caption ||
+    msg.documentWithCaptionMessage?.message?.documentMessage?.caption ||
     ''
   )
 }
@@ -58,6 +60,7 @@ function readContext(msg) {
     msg.imageMessage?.contextInfo ||
     msg.videoMessage?.contextInfo ||
     msg.documentMessage?.contextInfo ||
+    msg.documentWithCaptionMessage?.message?.documentMessage?.contextInfo ||
     msg.stickerMessage?.contextInfo ||
     msg.audioMessage?.contextInfo ||
     {}
@@ -219,11 +222,16 @@ async function onPrivateMessage(sock, m, jid) {
     return
   }
 
+  // A file for the library (past questions, notes…): Bro Paul adds it.
+  if (await handleIncomingMaterial(sock, m, msg, { jid, isGroup: false, senderId: jid, senderName: m.pushName || '' })) return
+
   const isVoice = Boolean(msg.audioMessage)
   if (isVoice) sock.readMessages([m.key]).catch(() => {})
   let text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
   if (!text) return
   if (!isVoice) text = await withQuotedVoice(sock, m, jid, text, readContext(msg))
+  // Their answer to "Is it for the library? Send the course code".
+  if (!isVoice && (await completePendingMaterial(sock, jid, text, { senderId: jid, senderName: m.pushName || '' }))) return
 
   if (!isVoice && isStickerTeacher(m, jid)) {
     const answer = await stickerCommand(text)
@@ -291,6 +299,22 @@ async function onMessage(sock, m) {
 
   const fromMe = Boolean(m.key.fromMe)
   const hasDocument = Boolean(msg.documentMessage || msg.documentWithCaptionMessage)
+
+  // Past questions / notes shared for the library (in groups where an admin
+  // switched "Ask for materials" on): Bro Paul adds them and says thanks.
+  if (!fromMe && (hasDocument || msg.imageMessage)) {
+    const mediaCtx = readContext(msg)
+    const myIds = botIds(sock)
+    const handled = await handleIncomingMaterial(sock, m, msg, {
+      jid,
+      isGroup: true,
+      senderId: m.key.participant || jid,
+      senderName: m.pushName || '',
+      mentionedBot: (mediaCtx.mentionedJid || []).some((j) => myIds.includes(bareId(j))),
+      repliedToBot: Boolean(mediaCtx.quotedMessage) && myIds.includes(bareId(mediaCtx.participant)),
+    })
+    if (handled) return
+  }
   const react = async () => {
     if (!config.reactions) return
     try {

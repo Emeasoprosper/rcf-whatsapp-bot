@@ -56,6 +56,9 @@ export const config = {
   featuredPost: process.env.FEATURED_POST !== 'false',
   featuredHour: num(process.env.FEATURED_HOUR, 12),
   reactions: true,
+  // Files people send Bro Paul for the library get uploaded by him (admin
+  // app > AI Library switches this live).
+  autoUploadMaterials: true,
   // Join a lively discussion without being tagged, when the AI thinks it can
   // genuinely help. At most once per cooldown per group.
   chimeIn: process.env.CHIME_IN !== 'false',

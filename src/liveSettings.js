@@ -31,6 +31,7 @@ function apply(settings = {}) {
   set('activeFromHour', settings.activeFromHour)
   set('activeToHour', settings.activeToHour)
   set('dailyAiLimit', settings.dailyAiLimit)
+  set('autoUploadMaterials', settings.autoUploadMaterials)
   if (typeof settings.answerUntagged === 'boolean') config.botMode = settings.answerUntagged ? 'tag_and_requests' : 'tag_only'
 }
 

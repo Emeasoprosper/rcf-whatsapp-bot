@@ -311,6 +311,7 @@ function looksLikeLevelRequest(text, { tagged }) {
 
 function detectType(text) {
   if (/past\s*questions?|\bp\.?q\b/i.test(text)) return 'past_question'
+  if (/lecture\s*notes?|\bhandouts?\b|\bnotes?\b/i.test(text)) return 'lecture_notes'
   if (/\baudio\b|\bsermons?\b/i.test(text)) return 'audio'
   return null
 }
@@ -386,13 +387,15 @@ async function resourceReply(text, senderId = '', audience = 'campus', who = {})
 const NO_RAW_FILE_NOTE =
   "💡 Instead of a file in the chat, you'll get a library link, and honestly it's the better deal: download it once in the app and it's yours to read anytime, even with your data off. It won't eat your phone storage or get lost in chats. Any trouble at all, just message me and I'll walk you through it 🤝"
 
-async function fileRequest(title, senderId, who) {
-  if (!config.botApiKey || !senderId || title.length < 2) return false
+// Returns the backend's answer ({ aiNotes, aiNotesUrl, askHere, … }) or null.
+async function fileRequest(title, senderId, who, type = null) {
+  if (!config.botApiKey || !senderId || title.length < 2) return null
   try {
-    await botApi('/requests', {
+    const res = await botApi('/requests', {
       method: 'POST',
       body: {
         title,
+        type: type || detectType(`${title} ${who.asked || ''}`) || undefined,
         courseCode: courseCodeOnly(title) || undefined,
         asked: who.asked ? stripMentions(who.asked).slice(0, 500) : undefined,
         whatsappId: senderId,
@@ -400,12 +403,28 @@ async function fileRequest(title, senderId, who) {
         groupJid: who.groupId || undefined,
       },
     })
-    logActivity('request', who.groupId || senderId, `Filed a material request for "${title}"${who.name ? ` from ${who.name}` : ''}`)
-    return true
+    logActivity('request', who.groupId || senderId, `Filed a material request for "${title}"${who.name ? ` from ${who.name}` : ''}${res?.aiNotes === 'queued' ? ' (AI is writing notes)' : ''}`)
+    return res || {}
   } catch (err) {
     console.error('Could not file the material request:', err.message)
-    return false
+    return null
   }
+}
+
+// What Bro Paul adds after filing a request, depending on what the backend did.
+function requestFollowUp(name, filed, who) {
+  const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
+  if (filed?.aiNotes === 'exists' && filed.aiNotesUrl) {
+    return `Good news: we already have lecture notes for this 📚\n👉 ${filed.aiNotesUrl}`
+  }
+  if (filed?.aiNotes === 'queued') {
+    return `✍️ So I'm writing full lecture notes for "${name}" for you right now: a scheme of work, clear explanations, worked examples and practice questions with answers. It takes a few minutes; ${where} with the link the moment they're ready.\n\n${NO_RAW_FILE_NOTE}`
+  }
+  let text = `📝 I've sent a request to the library team for you. Once it's added, ${where} with the link.\n${NO_RAW_FILE_NOTE}`
+  if (filed?.askHere) {
+    text += `\n\n📢 Family, does anyone have *${name}*? Please send it to me in DM, or reply to this message with the file, and I'll add it to the library for everyone 🙏`
+  }
+  return text
 }
 
 // Is this file really for that course? Its course code, or the code in its
@@ -526,7 +545,15 @@ async function multiSearchReply(parts, type, senderId, who) {
   if (found.length === 0 && missing.length === 0) return 'Tell me the course codes or titles, e.g. *MTH 211 and CSC 224 past questions*.'
 
   const filed = []
-  for (const query of missing) if (await fileRequest(query, senderId, who)) filed.push(query)
+  const writing = [] // lecture notes the AI is now writing
+  const asking = [] // past questions the group is being asked for
+  for (const query of missing) {
+    const res = await fileRequest(query, senderId, who, detectType(query) || type)
+    if (!res) continue
+    filed.push(query)
+    if (res.aiNotes === 'queued') writing.push(query)
+    if (res.askHere) asking.push(query)
+  }
 
   const lines = []
   if (found.length) {
@@ -543,8 +570,15 @@ async function multiSearchReply(parts, type, senderId, who) {
     lines.push('', `😔 Not in the library yet: ${missing.map((q) => `*${q}*`).join(', ')}`)
     if (filed.length === missing.length) {
       const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
-      lines.push(`📝 I've sent ${missing.length > 1 ? 'a separate request for each one' : 'a request'} to the library team. Once ${missing.length > 1 ? "they're" : "it's"} added, ${where} with the link.`)
+      if (writing.length) {
+        lines.push(`✍️ I'm writing full lecture notes for ${writing.map((q) => `*${q}*`).join(', ')} right now (scheme of work, explanations, worked examples, practice questions). ${where} with the link${writing.length > 1 ? 's' : ''} when they're ready.`)
+      }
+      const rest = missing.length - writing.length
+      if (rest > 0) lines.push(`📝 I've sent ${rest > 1 ? 'a separate request for each of the others' : writing.length ? 'a request for the other one' : 'a request'} to the library team. Once added, ${where} with the link.`)
       lines.push(NO_RAW_FILE_NOTE)
+      if (asking.length) {
+        lines.push('', `📢 Family, does anyone have ${asking.map((q) => `*${q}*`).join(', ')}? Please send it to me in DM, or reply to this message with the file, and I'll add it to the library for everyone 🙏`)
+      }
     } else {
       lines.push(`📝 Request ${missing.length > 1 ? 'them' : 'it'}: ${config.siteUrl}/contribute/request`)
     }
@@ -574,9 +608,11 @@ async function searchReply(text, senderId, who = {}) {
       // Their own words when it's their message; the AI's search words
       // otherwise (the full message is attached to the request either way).
       const name = askedName(clean) || query
-      if (await fileRequest(name, senderId, who)) {
-        const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
-        return `I couldn't find "${name}" in the library yet 😔\n\n📝 I've sent a request to the library team for you. Once it's added, ${where} with the link.\n${NO_RAW_FILE_NOTE}\n📤 Have it already? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
+      const filed = await fileRequest(name, senderId, who, type)
+      if (filed) {
+        if (filed.aiNotes === 'exists' && filed.aiNotesUrl) return requestFollowUp(name, filed, who)
+        const upload = filed.aiNotes === 'queued' ? '' : `\n📤 Have it already? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
+        return `I couldn't find "${name}" in the library yet 😔\n\n${requestFollowUp(name, filed, who)}${upload}`
       }
       return `I couldn't find "${name}" in the library yet 😔\n\n📝 Request it: ${config.siteUrl}/contribute/request\n📤 Have it? Please upload it so others can benefit: ${config.siteUrl}/contribute/submit`
     }
