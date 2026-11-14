@@ -65,6 +65,7 @@ What the RCF digital library offers (you may tell people about these):
 - Search books, past questions, lecture notes, handouts, audio sermons and devotionals.
 - Members can upload materials to help others ("Contribute" > "Submit a resource").
 - Members can request a material the library doesn't have yet ("Contribute" > "Request material").
+- For any course, the library's AI writes comprehensive lecture notes (scheme of work, clear explanations, worked examples, practice questions with answers) by RCF MOUAU, sent as a library link in a few minutes.
 - They sign in with their library account to open files.
 - Downloads are saved inside the app, so books can be read offline with no data. They don't show in the phone's file manager or gallery.
 
@@ -78,6 +79,7 @@ How to reply:
 - WhatsApp plain text, as short as a person would type (usually one line, rarely over 50 words unless they asked for an explanation). Light formatting like *bold* is fine. No headings, no markdown links.
 - Read <recent_chat> to understand what people are talking about, then answer the latest <member_message>. Don't repeat yourself if you already answered something in <recent_chat>.
 - If the member wants a specific book, past question, note or other material that the library might have, reply with ONLY this single line and nothing else: SEARCH: <short search words, e.g. GST 101 past questions>. If they ask for several different materials in one message, put each one in the same line separated by " | ", e.g. SEARCH: MTH 211 past questions | CSC 224 past questions | Atomic Habits. Use the member's own words for each one: never invent or guess a course code or title they didn't write, and never leave one out.
+- The library CAN write lecture notes: when someone asks you to write, generate, create or make notes, lecture notes, a handout or course material for a course (including "generate it", "make it", "write it" about a course mentioned just before in the chat), reply with ONLY this single line: NOTES: <course code and title, e.g. ACC 211 Financial Accounting I>. Several courses: separate them with " | ". Never say the library can't generate or write notes; it can, and they arrive as a library link in a few minutes.
 - Keep the level in the search when they give one (200lv, 300 level, year 2, 2nd year are all levels), e.g. SEARCH: maths 200 level past questions. The system then lists that level's courses (like MTH 221, MTH 222) and asks which one.
 - For general study, school or Bible questions, answer helpfully from general knowledge and say so when you are unsure.
 - Casual chat, greetings and thanks: reply briefly and kindly.
@@ -190,8 +192,9 @@ const squash = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim()
 export async function askRequestItems(message) {
   const text = await callGemini({
     systemInstruction: { parts: [{ text: ITEMS_RULES }] },
-    contents: [{ role: 'user', parts: [{ text: clean(message, 1000) }] }],
-    generationConfig: { temperature: 0, maxOutputTokens: 400, responseMimeType: 'application/json' },
+    // A whole semester's course list can be long: read all of it.
+    contents: [{ role: 'user', parts: [{ text: clean(message, 3000) }] }],
+    generationConfig: { temperature: 0, maxOutputTokens: 1500, responseMimeType: 'application/json' },
   })
   let items
   try {
@@ -204,7 +207,7 @@ export async function askRequestItems(message) {
   const exact = items.filter((i) => typeof i === 'string' && i.trim()).map((i) => i.replace(/\s+/g, ' ').trim())
   // Anything not found word for word in the message: don't trust the list.
   if (exact.length === 0 || !exact.every((i) => source.includes(squash(i)))) return null
-  return [...new Set(exact)].slice(0, 8)
+  return [...new Set(exact)].slice(0, 20)
 }
 
 // Getting to know people like a person would. member = what he remembers
@@ -305,6 +308,8 @@ export async function askAi({ question, senderName = '', history = [], knowledge
   })
 
   const { text: answer, member: learned } = takeMemberTag(raw)
+  const notes = answer.match(/^\s*NOTES:\s*(.+)$/im)
+  if (notes) return { type: 'notes', query: notes[1].trim().slice(0, 600), member: learned }
   const search = answer.match(/^\s*SEARCH:\s*(.+)$/im)
   // Several materials come as "a | b | c" (see the SEARCH rule), so allow room.
   if (search) return { type: 'search', query: search[1].trim().slice(0, 400), member: learned }
@@ -539,6 +544,6 @@ export async function askChimeIn({ history = [], knowledgeEntries = [], audience
     ],
     generationConfig: { temperature: 0.6, maxOutputTokens: 600 },
   })
-  if (/^\s*SKIP\b/i.test(text) || /^\s*SEARCH:/im.test(text)) return null
+  if (/^\s*SKIP\b/i.test(text) || /^\s*(SEARCH|NOTES):/im.test(text)) return null
   return text
 }

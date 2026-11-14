@@ -395,7 +395,9 @@ async function fileRequest(title, senderId, who, type = null) {
       method: 'POST',
       body: {
         title,
-        type: type || detectType(`${title} ${who.asked || ''}`) || undefined,
+        // A course asked for with no kind named ("ACC 211 Financial Accounting")
+        // is taken as lecture notes, so the AI writes them.
+        type: type || detectType(`${title} ${who.asked || ''}`) || (courseCodeOnly(title) ? 'lecture_notes' : undefined),
         courseCode: courseCodeOnly(title) || undefined,
         asked: who.asked ? stripMentions(who.asked).slice(0, 500) : undefined,
         whatsappId: senderId,
@@ -409,6 +411,29 @@ async function fileRequest(title, senderId, who, type = null) {
     console.error('Could not file the material request:', err.message)
     return null
   }
+}
+
+// "Generate notes for ACC 211 | BUS 211…": one AI notes job per course.
+async function notesReply(query, senderId, who) {
+  const courses = query.split('|').map((q) => q.replace(/\s+/g, ' ').trim()).filter((q) => q.length >= 3).slice(0, MAX_ITEMS)
+  if (!courses.length) return 'Tell me the course code and title, e.g. *ACC 211 Financial Accounting I*, and I\'ll get the notes written ✍️'
+  const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
+  const writing = []
+  const ready = []
+  for (const course of courses) {
+    const res = await fileRequest(course, senderId, who, 'lecture_notes')
+    if (res?.aiNotes === 'exists' && res.aiNotesUrl) ready.push(`📘 *${course}*\n${res.aiNotesUrl}`)
+    else if (res) writing.push(course)
+  }
+  const lines = []
+  if (ready.length) lines.push('We already have notes for these 📚', ...ready, '')
+  if (writing.length) {
+    lines.push(`✍️ On it! I'm writing full lecture notes for:`)
+    writing.forEach((c) => lines.push(`• *${c}*`))
+    lines.push('', `Each one gets a scheme of work, clear explanations, worked examples and practice questions with answers. They take a few minutes each; ${where} with each link as soon as it's ready.`, '', NO_RAW_FILE_NOTE)
+  }
+  if (!lines.length) return `I couldn't start the notes just now 😅 Please try again in a few minutes, or request them here: ${config.siteUrl}/contribute/request`
+  return lines.join('\n').trim()
 }
 
 // What Bro Paul adds after filing a request, depending on what the backend did.
@@ -489,7 +514,8 @@ async function requestItems(message, fallbackText) {
 
 // Words that look like course codes but aren't ("level 200", "year 300").
 const NOT_A_CODE = /^(level|year|page|room|chapter|class|hall|block|lv|lvl)$/i
-const MAX_ITEMS = 8
+// A semester's course list can be long (14+ courses): handle them all.
+const MAX_ITEMS = 20
 
 // Several materials asked for in one message, as separate searches:
 // - the AI's "SEARCH: a | b | c",
@@ -567,22 +593,31 @@ async function multiSearchReply(parts, type, senderId, who) {
     }
   }
   if (missing.length) {
-    lines.push('', `😔 Not in the library yet: ${missing.map((q) => `*${q}*`).join(', ')}`)
-    if (filed.length === missing.length) {
-      const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
-      if (writing.length) {
-        lines.push(`✍️ I'm writing full lecture notes for ${writing.map((q) => `*${q}*`).join(', ')} right now (scheme of work, explanations, worked examples, practice questions). ${where} with the link${writing.length > 1 ? 's' : ''} when they're ready.`)
-      }
-      const rest = missing.length - writing.length
-      if (rest > 0) lines.push(`📝 I've sent ${rest > 1 ? 'a separate request for each of the others' : writing.length ? 'a request for the other one' : 'a request'} to the library team. Once added, ${where} with the link.`)
-      lines.push(NO_RAW_FILE_NOTE)
-      if (asking.length) {
-        lines.push('', `📢 Family, does anyone have ${asking.map((q) => `*${q}*`).join(', ')}? Please send it to me in DM, or reply to this message with the file, and I'll add it to the library for everyone 🙏`)
-      }
-    } else {
-      lines.push(`📝 Request ${missing.length > 1 ? 'them' : 'it'}: ${config.siteUrl}/contribute/request`)
+    // Each course on its own line, so a long list never reads as one item.
+    const bullets = (list) => list.forEach((q) => lines.push(`• *${q}*`))
+    const where = who.groupId ? "I'll send you a DM" : "I'll message you right here"
+    const others = missing.filter((q) => filed.includes(q) && !writing.includes(q))
+    const notFiled = missing.filter((q) => !filed.includes(q))
+    if (writing.length) {
+      lines.push('', `✍️ Not in the library yet, so I'm writing full lecture notes for ${writing.length === 1 ? 'this one' : `these ${writing.length}`}:`)
+      bullets(writing)
+      lines.push(`Each gets a scheme of work, clear explanations, worked examples and practice questions with answers. ${where} with each link as soon as it's ready.`)
     }
-    lines.push(`📤 Have any of them? Please upload so others can benefit: ${config.siteUrl}/contribute/submit`)
+    if (others.length) {
+      lines.push('', `📝 Not in the library yet, so I've asked the library team for ${others.length === 1 ? 'this one' : `these ${others.length}`}:`)
+      bullets(others)
+      lines.push(`Once added, ${where} with the link.`)
+    }
+    if (notFiled.length) {
+      lines.push('', '😔 Not in the library yet:')
+      bullets(notFiled)
+      lines.push(`📝 Request ${notFiled.length > 1 ? 'them' : 'it'}: ${config.siteUrl}/contribute/request`)
+    }
+    if (filed.length) lines.push('', NO_RAW_FILE_NOTE)
+    if (asking.length) {
+      lines.push('', `📢 Family, does anyone have ${asking.map((q) => `*${q}*`).join(', ')}? Please send it to me in DM, or reply to this message with the file, and I'll add it to the library for everyone 🙏`)
+    }
+    if (others.length || notFiled.length) lines.push(`📤 Have any of them? Please upload so others can benefit: ${config.siteUrl}/contribute/submit`)
   }
   if (found.length) lines.push('', 'Sign in with your library account to open them.')
   return lines.join('\n')
@@ -677,6 +712,8 @@ async function aiReply(text, { senderName, senderId = '', groupId = null, histor
     learnFromReply(senderId, result.member)
     // The AI decided the member is asking for a material: look it up for real.
     if (result.type === 'search') return await resourceReply(result.query, senderId, audience, { name: senderName, groupId, asked: text })
+    // "Generate notes for …": the library's AI writes them.
+    if (result.type === 'notes') return await notesReply(result.query, senderId, { name: senderName, groupId, asked: text })
     // Business or a request for the owner: the direct contact in DM (the AI
     // has talked it through first), an invite to the DM in a group.
     if (result.type === 'contact') return isPrivate ? businessReply() : dmInviteReply()
