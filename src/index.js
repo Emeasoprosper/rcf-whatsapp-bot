@@ -10,7 +10,7 @@ import { logChat, startChatLog } from './chatLog.js'
 import { speak, suitsVoice } from './voice.js'
 import { addBookPreviews } from './linkPreview.js'
 import { transcribeVoice } from './ai.js'
-import { remember, recentChat, inPrayer } from './chatMemory.js'
+import { remember, recentChat, inPrayer, loadChat } from './chatMemory.js'
 import { startPoster, queueWelcome, allowRepostToday } from './poster.js'
 import { loadAuth } from './authStore.js'
 import { isAllowedGroup, refreshGroups, reportGroup, reportAllGroups, groupSettings, whenNewGroup, whenSettingsChange, markLeft } from './groups.js'
@@ -239,6 +239,7 @@ async function onPrivateMessage(sock, m, jid) {
   }
 
   const senderName = m.pushName || ''
+  await loadChat(jid) // what they talked about before a restart
   const history = recentChat(jid)
   remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
   logChat({ chatJid: jid, chatName: senderName, senderName, kind: isVoice ? 'voice' : 'text', text })
@@ -359,6 +360,7 @@ async function onMessage(sock, m) {
   if (!fromMe && !isVoice && (mentionedBot || /^\W*bro\s*paul\b/i.test(text))) text = await withQuotedVoice(sock, m, jid, text, ctx)
 
   // History is taken before this message is added, so the AI sees it once.
+  await loadChat(jid)
   const history = recentChat(jid)
   if (!fromMe) remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
 

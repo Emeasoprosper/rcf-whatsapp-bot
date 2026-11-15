@@ -11,6 +11,7 @@ import { getState, setState } from './state.js'
 //   never asks again, even if they didn't say it.
 const KEY = 'contacts'
 const MAX = 5000
+const MAX_NOTES = 15 // things they told him about themselves: { text, at }
 
 export function getContact(jid) {
   return getState(KEY, {})[jid] || null
@@ -39,5 +40,19 @@ export function learnFromReply(jid, member) {
   if (member.address === 'sir' || member.address === 'ma') patch.address = member.address
   const title = String(member.title || '').replace(/[^\p{L} .]/gu, '').trim().slice(0, 20)
   if (title) patch.title = title
+  const fresh = (member.notes || []).map((n) => String(n).replace(/\s+/g, ' ').trim().slice(0, 120)).filter((n) => n.length >= 3)
+  if (fresh.length) {
+    const old = getContact(jid)?.notes || []
+    const seen = new Set(old.map((n) => n.text.toLowerCase()))
+    const added = fresh.filter((n) => !seen.has(n.toLowerCase())).map((text) => ({ text, at: Date.now() }))
+    if (added.length) patch.notes = [...old, ...added].slice(-MAX_NOTES)
+  }
   if (Object.keys(patch).length) updateContact(jid, patch)
+}
+
+// Phone number from a WhatsApp id ("2348012345678@s.whatsapp.net"), or ''
+// for ids that hide the number (groups, @lid).
+export function phoneOf(jid) {
+  const m = String(jid).match(/^(\d{7,15})(?::\d+)?@s\.whatsapp\.net$/)
+  return m ? `+${m[1]}` : ''
 }

@@ -1,9 +1,93 @@
 import { config } from './config.js'
 import { isPrayerLike, isBirthdayWish } from './reactions.js'
 import { logChat } from './chatLog.js'
+import { getPool } from './authStore.js'
 
-// Last few messages per group, in memory only, so the AI can follow the
-// conversation. Nothing here is saved to disk.
+// Recent messages per chat, so the AI can follow the conversation.
+// Also saved to the database (bot_chat_memory) when DATABASE_URL is set, so
+// a restart or redeploy doesn't wipe his memory: the first time a chat is
+// touched after a start, its recent history is loaded back (loadChat).
+// Private chats keep more (a person's own conversation with him) than groups.
+const PRIVATE_KEEP = 40
+const KEEP_DAYS = 120
+const GROUP_KEEP_DAYS = 3
+const keepFor = (jid) => (String(jid).endsWith('@g.us') ? Math.max(config.chatMemorySize, 20) : PRIVATE_KEEP)
+const db = () => (process.env.DATABASE_URL ? getPool() : null)
+
+let tableReady = null
+function ensureTable() {
+  const pool = db()
+  if (!pool) return Promise.resolve(false)
+  tableReady ||= pool
+    .query(`
+      CREATE TABLE IF NOT EXISTS bot_chat_memory (
+        id BIGSERIAL PRIMARY KEY,
+        chat_jid TEXT NOT NULL,
+        name TEXT,
+        text TEXT NOT NULL,
+        from_bot BOOLEAN NOT NULL DEFAULT false,
+        at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS bot_chat_memory_chat_at ON bot_chat_memory (chat_jid, at DESC);
+    `)
+    .then(() => {
+      // Old chatter is let go now and then, like a person forgets.
+      // Group chatter only matters for a few days; private chats much longer.
+      pool
+        .query(
+          `DELETE FROM bot_chat_memory
+           WHERE at < now() - make_interval(days => CASE WHEN chat_jid LIKE '%@g.us' THEN $2 ELSE $1 END)`,
+          [KEEP_DAYS, GROUP_KEEP_DAYS]
+        )
+        .catch(() => {})
+      return true
+    })
+    .catch((err) => {
+      tableReady = null
+      console.error('Chat memory table unavailable:', err.message)
+      return false
+    })
+  return tableReady
+}
+
+const loaded = new Set()
+const loading = new Map()
+
+// Brings a chat's saved history back into memory (once per chat per start).
+// Safe to await before every reply: after the first time it's instant.
+export async function loadChat(jid) {
+  if (!jid || loaded.has(jid)) return
+  if (loading.has(jid)) return loading.get(jid)
+  const job = (async () => {
+    try {
+      if (!(await ensureTable())) return
+      const { rows } = await db().query(
+        `SELECT name, text, from_bot, at FROM bot_chat_memory WHERE chat_jid = $1 ORDER BY at DESC LIMIT $2`,
+        [jid, keepFor(jid)]
+      )
+      const saved = rows.reverse().map((r) => ({ name: r.from_bot ? config.botName : r.name || 'Member', text: r.text, fromBot: r.from_bot, at: new Date(r.at).getTime() }))
+      // Anything said since the start (already in memory) stays after the saved part.
+      const now = groups.get(jid) || []
+      const firstNew = now.length ? now[0].at : Infinity
+      const merged = [...saved.filter((s) => s.at < firstNew), ...now].slice(-keepFor(jid))
+      groups.set(jid, merged)
+      loaded.add(jid)
+    } catch (err) {
+      console.error('Could not load chat memory:', err.message)
+    } finally {
+      loading.delete(jid)
+    }
+  })()
+  loading.set(jid, job)
+  return job
+}
+
+function save(jid, entry) {
+  ensureTable()
+    .then((ok) => ok && db().query(`INSERT INTO bot_chat_memory (chat_jid, name, text, from_bot) VALUES ($1, $2, $3, $4)`, [jid, entry.name, entry.text, entry.fromBot]))
+    .catch((err) => console.error('Could not save chat memory:', err.message))
+}
+
 const groups = new Map()
 const lastHumanAt = new Map()
 const prayerMarks = new Map() // groupId -> [{ name, at }] of recent prayer-like messages
@@ -19,9 +103,11 @@ export function remember(groupId, { name, text, fromBot = false, kind = 'text' }
   if (!groupId || !text) return
   if (fromBot) logChat({ chatJid: groupId, fromBot: true, kind, text })
   const list = groups.get(groupId) || []
-  list.push({ name: fromBot ? config.botName : name || 'Member', text: text.slice(0, 400), fromBot, at: Date.now() })
-  if (list.length > config.chatMemorySize) list.shift()
+  const entry = { name: fromBot ? config.botName : name || 'Member', text: text.slice(0, 600), fromBot, at: Date.now() }
+  list.push(entry)
+  while (list.length > keepFor(groupId)) list.shift()
   groups.set(groupId, list)
+  save(groupId, entry)
   if (!fromBot) lastHumanAt.set(groupId, Date.now())
   // Birthday wishes ("more grace IJN", "Amen") aren't a prayer session.
   if (!fromBot && isPrayerLike(text) && !isBirthdayWish(text)) {

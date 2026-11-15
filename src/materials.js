@@ -16,7 +16,11 @@ import { botUpload } from './backend.js'
 import { groupSettings } from './groups.js'
 import { logActivity } from './activity.js'
 
-const ACADEMIC = /\b[A-Za-z]{3}\s?-?\d{3}\b|past\s*questions?|\bp\.?\s?q'?s?\b|lecture|\bnotes?\b|handouts?|\bexams?\b|\btests?\b|assignments?|tutorials?|textbooks?|syllabus|scheme of work|semester|course/i
+// Only clear signs of study material. Generic words ("lecture", "course",
+// "semester", "test") also appear on event flyers ("ETF Lecture Hall"), so
+// they don't count; the library AI also looks at every picture/PDF before
+// anything is saved.
+const ACADEMIC = /\b[A-Za-z]{3}\s?-?\d{3}\b|past\s*questions?|\bp\.?\s?q'?s\b|\bpq\b|lecture\s*notes?|course\s*(notes?|materials?|outline)|handouts?|textbooks?|syllabus|scheme of work/i
 const COURSE_CODE = /\b[A-Za-z]{3}\s?-?\d{3}\b/
 const DOC_TYPES = /pdf|msword|officedocument|powerpoint|presentation/i
 const ALBUM_WAIT_MS = 20 * 1000 // photos sent together arrive one by one
@@ -50,18 +54,46 @@ function thanks(name, result) {
   return text
 }
 
-async function upload(sock, { jid, quoted, files, caption, senderId, senderName, isGroup }) {
+// The library AI looks at the file first. Returns false when nothing was saved
+// because it isn't study material (or we couldn't tell and should ask).
+async function upload(sock, { jid, quoted, files, caption, senderId, senderName, isGroup, confirmed = false, reactTo = null }) {
   let result = null
   try {
     result = await botUpload(
-      { caption, whatsappId: senderId, whatsappName: senderName, groupJid: isGroup ? jid : '' },
+      { caption, whatsappId: senderId, whatsappName: senderName, groupJid: isGroup ? jid : '', confirmed: confirmed ? 'true' : '' },
       files.map((f) => ({ buffer: f.buffer, mimetype: f.mimetype, fileName: f.fileName }))
     )
-    logActivity('upload', isGroup ? jid : null, `Added "${result.title}" to the library (sent by ${senderName || 'a member'})`)
   } catch (err) {
     console.error('Library upload from WhatsApp failed:', err.message)
   }
+
+  if (result?.status === 'not_material') {
+    console.log(`Not saved (not study material): ${result.reason || ''}`)
+    // In groups people share flyers and photos all the time: stay quiet.
+    if (!isGroup) {
+      await sock.sendMessage(jid, {
+        text: `Thanks ${first(senderName)}! 😊 This doesn't look like study material to me${result.reason ? ` (${result.reason.replace(/\.$/, '')})` : ''}, so I haven't added it to the library. If it *is* for a course, reply with the course code and what it is (e.g. *MTH 211 past questions*) and I'll add it.`,
+      }).catch(() => {})
+      pending.set(jid, { files, caption, expires: Date.now() + PENDING_MS })
+    }
+    return false
+  }
+  if (result?.status === 'unverified') {
+    if (!isGroup) {
+      pending.set(jid, { files, caption, expires: Date.now() + PENDING_MS })
+      await sock.sendMessage(jid, {
+        text: `Thanks for this, ${first(senderName)}! 📚 Is it for the library? Reply with the course code and what it is (e.g. *MTH 211 past questions*) and I'll add it for everyone. If it's not, no wahala 😊`,
+      }).catch(() => {})
+    }
+    return false
+  }
+
+  if (result) {
+    logActivity('upload', isGroup ? jid : null, `Added "${result.title}" to the library (sent by ${senderName || 'a member'})`)
+    if (reactTo) await sock.sendMessage(jid, { react: { text: '📥', key: reactTo } }).catch(() => {})
+  }
   await sock.sendMessage(jid, { text: thanks(senderName, result) }, quoted ? { quoted } : undefined).catch(() => {})
+  return true
 }
 
 // Photos are collected for a short while (an album arrives one by one).
@@ -90,7 +122,11 @@ export async function handleIncomingMaterial(sock, m, msg, { jid, isGroup, sende
 
   if (isGroup) {
     if (!groupSettings(jid).askForMaterials) return false
-    if (!(mentionedBot || repliedToBot || academic)) return false
+    // Photos and PDFs go to the library AI, which looks at them (one photo of
+    // a past question is caught even with no caption; a flyer is ignored).
+    // Word/PowerPoint can't be looked at, so they need a clear caption/name.
+    const aiCanCheck = media.kind === 'image' || /pdf/i.test(media.mimetype)
+    if (!(mentionedBot || repliedToBot || academic || aiCanCheck)) return false
   }
 
   let buffer
@@ -101,23 +137,18 @@ export async function handleIncomingMaterial(sock, m, msg, { jid, isGroup, sende
     return false
   }
   const file = { buffer, mimetype: media.mimetype, fileName: media.fileName }
-  await sock.sendMessage(jid, { react: { text: '📥', key: m.key } }).catch(() => {})
 
-  const send = (files, caption) => upload(sock, { jid, quoted: m, files, caption, senderId, senderName, isGroup })
-  const decide = async (files, caption, clearlyAcademic) => {
-    if (isGroup || clearlyAcademic) return send(files, caption)
-    // DM and not clear: ask first, keep the files for a while.
-    pending.set(jid, { files, caption, expires: Date.now() + PENDING_MS })
-    await sock.sendMessage(jid, {
-      text: `Thanks for this, ${first(senderName)}! 📚 Is it for the library? Reply with the course code and what it is (e.g. *MTH 211 past questions*) and I'll add it for everyone. If it's not for the library, no wahala, just ignore this 😊`,
-    }).catch(() => {})
-  }
+  // Every file goes to the library, whose AI looks at it before saving: a
+  // flyer or random photo comes back "not_material" and nothing is added.
+  // In a DM, when even the AI can't tell, Bro Paul asks first.
+  const send = (files, caption) => upload(sock, { jid, quoted: m, files, caption, senderId, senderName, isGroup, reactTo: m.key })
+  const decide = (files, caption) => send(files, caption)
 
   if (media.kind === 'document') {
-    await decide([file], media.caption || media.fileName, academic)
+    await decide([file], media.caption || media.fileName)
   } else {
     collect(`${jid}|${senderId}`, file, media.caption, (album) => {
-      decide(album.files, album.caption, ACADEMIC.test(album.caption)).catch((err) => console.error('Album upload failed:', err.message))
+      decide(album.files, album.caption).catch((err) => console.error('Album upload failed:', err.message))
     })
   }
   return true
@@ -138,6 +169,6 @@ export async function completePendingMaterial(sock, jid, text, { senderId, sende
   }
   if (!COURSE_CODE.test(text) && !ACADEMIC.test(text) && !/^\s*(yes|yeah|yep|sure|ok(ay)?)\b/i.test(text)) return false
   pending.delete(jid)
-  await upload(sock, { jid, quoted: null, files: held.files, caption: `${text} ${held.caption || ''}`.trim(), senderId, senderName, isGroup: false })
+  await upload(sock, { jid, quoted: null, files: held.files, caption: `${text} ${held.caption || ''}`.trim(), senderId, senderName, isGroup: false, confirmed: true })
   return true
 }

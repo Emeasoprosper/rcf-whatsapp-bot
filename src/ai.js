@@ -217,7 +217,13 @@ const MEMBER_RULES = `
 
 Knowing who you're talking to:
 - How to address people: with students and peers stay casual ("boss", their name, "my guy"). Use "Sir" or "Ma" only for someone who has shown they're a pastor, lecturer, doctor, staff, a parent, older, an executive or otherwise prominent, or who asked to be addressed that way; and use Sir or Ma only according to what they themselves made clear (e.g. "Mrs", "Mr", "as a mother", "as a father", "I'm a woman", "call me Ma"). Never guess anyone's gender or status from their name or their WhatsApp name: "Dr Okoro" or "Pastor Ade" alone doesn't tell you if it's a man or a woman. If someone is clearly senior but hasn't made that clear, use their title ("Nice meeting you Doctor", "Pastor") or just be respectful, without Sir or Ma.
-- REQUIRED: whenever the member's message tells you their name, or something that shows how to address them (title or role like Pastor, Dr, lecturer, staff, parent; Mrs/Mr/Miss; "I'm a lady"; "call me Ma"), you MUST end your reply with this on its own last line: [[member name="..." address="sir|ma|" title="..."]] filled with only what they told you (leave the rest empty; address only "sir" or "ma" when they made it clear, otherwise empty). Example: they say "I'm Chioma" -> last line [[member name="Chioma" address="" title=""]]. Never mention or explain this line.`
+- REQUIRED: whenever the member's message tells you their name, or something that shows how to address them (title or role like Pastor, Dr, lecturer, staff, parent; Mrs/Mr/Miss; "I'm a lady"; "call me Ma"), you MUST end your reply with this on its own last line: [[member name="..." address="sir|ma|" title="..."]] filled with only what they told you (leave the rest empty; address only "sir" or "ma" when they made it clear, otherwise empty). Example: they say "I'm Chioma" -> last line [[member name="Chioma" address="" title=""]]. Never mention or explain this line.
+- When they tell you something about themselves worth remembering next time (their department, level, a course they're struggling with, an exam they're preparing for, their birthday, something they asked you to remember), also add it as note="..." in that last line, in a few words, e.g. [[member name="" address="" title="" note="300L Accounting, preparing for ACC 311 exam"]]. Only facts they told you, never guesses.
+
+Memory and honesty (very important):
+- What you remember is ONLY what is in <recent_chat> (with when it was said) and <about_member>. You have no other memory of past chats.
+- If they ask "do you remember…?" and the answer is there, say so and mention the detail. If it is NOT there, say honestly that you don't remember (e.g. "I no fit remember that one o 😅, remind me?"). Never pretend, never guess, never make up details of earlier chats.
+- When earlier messages in <recent_chat> are from today or recently and are relevant (e.g. you already sent them something, or explained how to download), refer back to them naturally ("like I sent you earlier today ☝️") instead of repeating everything.`
 
 function memberNote(member) {
   if (!member) return ''
@@ -226,6 +232,11 @@ function memberNote(member) {
   if (member.title) lines.push(`Their title or role: ${clean(member.title, 20)}.`)
   if (member.address === 'sir') lines.push('Address him respectfully as Sir.')
   if (member.address === 'ma') lines.push('Address her respectfully as Ma.')
+  const notes = (member.notes || []).filter((n) => n?.text)
+  if (notes.length) {
+    lines.push('Things they told you before (you may bring these up naturally, but only these):')
+    for (const n of notes.slice(-15)) lines.push(`- ${clean(n.text, 120)}${n.at ? ` (${when(n.at).replace(/[[\]]/g, '').trim()})` : ''}`)
+  }
   if (member.askName) {
     lines.push(
       "This is your first chat with this person and you don't know their name yet. Reply to what they said, short and human, and casually ask their name in the same message, the way a person would (e.g. \"who I dey talk with sef?\" or \"what's your name by the way?\"). Never sound like a form."
@@ -258,13 +269,37 @@ export function replyLanguage(message) {
     : 'They wrote in English. Reply in fluent, natural English only, no Pidgin this time.'
 }
 
-// Pulls out (and removes) the [[member ...]] line.
+// "[today 14:05] " / "[yesterday 09:12] " / "[12 Nov] " before each remembered
+// message, so he knows how long ago things were said (Lagos time).
+const LAGOS = 'Africa/Lagos'
+const dayOf = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: LAGOS }).format(d)
+function when(at) {
+  if (!at) return ''
+  const d = new Date(at)
+  const today = dayOf(new Date())
+  const yesterday = dayOf(new Date(Date.now() - 864e5))
+  const time = new Intl.DateTimeFormat('en-GB', { timeZone: LAGOS, hour: '2-digit', minute: '2-digit' }).format(d)
+  if (dayOf(d) === today) return `[today ${time}] `
+  if (dayOf(d) === yesterday) return `[yesterday ${time}] `
+  return `[${new Intl.DateTimeFormat('en-GB', { timeZone: LAGOS, day: 'numeric', month: 'short' }).format(d)}] `
+}
+
+// Pulls out (and removes) the [[member ...]] line(s). note="..." is a fact
+// worth remembering about them (their course, level, what they're preparing for).
 function takeMemberTag(text) {
-  const m = text.match(/\[\[\s*member\b([^\]]*)\]\]/i)
-  if (!m) return { text, member: null }
-  const attr = (k) => (m[1].match(new RegExp(`${k}\\s*=\\s*"([^"]*)"`, 'i')) || [])[1] || ''
-  const member = { name: attr('name').trim(), address: attr('address').trim().toLowerCase(), title: attr('title').trim() }
-  return { text: text.replace(m[0], '').trim(), member }
+  const tags = [...text.matchAll(/\[\[\s*member\b([^\]]*)\]\]/gi)]
+  if (!tags.length) return { text, member: null }
+  const member = { name: '', address: '', title: '', notes: [] }
+  for (const m of tags) {
+    const attr = (k) => (m[1].match(new RegExp(`\\b${k}\\s*=\\s*"([^"]*)"`, 'i')) || [])[1] || ''
+    member.name ||= attr('name').trim()
+    member.address ||= attr('address').trim().toLowerCase()
+    member.title ||= attr('title').trim()
+    const note = attr('note').trim()
+    if (note) member.notes.push(note)
+    text = text.replace(m[0], '')
+  }
+  return { text: text.trim(), member }
 }
 
 // Returns { type: 'reply', text, member? }, { type: 'search', query } or { type: 'contact' }.
@@ -274,7 +309,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
     ? knowledgeEntries.map((e) => `- ${e.title}: ${e.text}`).join('\n')
     : '(none provided)'
   const chat = history.length
-    ? history.map((h) => `${clean(h.name, 40)}: ${clean(h.text, 300)}`).join('\n')
+    ? history.map((h) => `${when(h.at)}${clean(h.name, 40)}: ${clean(h.text, 300)}`).join('\n')
     : '(no earlier messages)'
 
   const raw = await callGemini({

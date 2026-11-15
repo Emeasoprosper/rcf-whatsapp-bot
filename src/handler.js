@@ -689,7 +689,7 @@ function humanFallback(text, { tired = false } = {}) {
 // themselves (like meeting someone), so the AI doesn't greet them by it.
 function memberFor(senderId, extra = {}) {
   const c = getContact(senderId)
-  return { name: c?.name || '', address: c?.address || '', title: c?.title || '', ...extra }
+  return { name: c?.name || '', address: c?.address || '', title: c?.title || '', notes: c?.notes || [], ...extra }
 }
 
 async function aiReply(text, { senderName, senderId = '', groupId = null, history, isPrivate = false, audience = 'campus', praying = false, revealAi = true, member = null }) {
