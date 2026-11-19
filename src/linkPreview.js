@@ -49,22 +49,42 @@ async function bookInfo(id) {
   return info
 }
 
-async function buildPreview(sock, url, id) {
-  const info = await bookInfo(id)
-  const preview = { 'canonical-url': url, 'matched-text': url, title: info.title, description: info.description }
-  if (info.image) {
+// A WhatsApp link card (the tappable picture + title box a pasted link gets).
+// Send it as { text: '<something with url>', linkPreview: card }.
+export async function linkCard(sock, { url, title, description = '', image = null }) {
+  const preview = { 'canonical-url': url, 'matched-text': url, title, description }
+  if (image) {
     // Uploaded as a proper link thumbnail so the preview shows the full
-    // cover (like a pasted link), with the small inline version as backup.
+    // picture (like a pasted link), with the small inline version as backup.
     const { imageMessage } = await prepareWAMessageMedia(
-      { image: info.image },
+      { image },
       { upload: sock.waUploadToServer, mediaTypeOverride: 'thumbnail-link' }
     )
     // Our own small version (sharper than the default tiny one).
-    preview.jpegThumbnail = await sharp(info.image).resize({ width: 240, withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer()
+    preview.jpegThumbnail = await sharp(image).resize({ width: 240, withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer()
       .catch(() => (imageMessage?.jpegThumbnail ? Buffer.from(imageMessage.jpegThumbnail) : undefined))
     preview.highQualityThumbnail = imageMessage || undefined
   }
   return preview
+}
+
+// Same card, with its picture downloaded from imageUrl (skipped if that fails).
+export async function linkCardFromImageUrl(sock, { url, title, description, imageUrl }) {
+  let image = null
+  if (imageUrl) {
+    try {
+      const raw = Buffer.from(await (await fetchTimed(imageUrl, 10000)).arrayBuffer())
+      image = await sharp(raw).resize({ width: 600, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer()
+    } catch (err) {
+      console.error('Link card picture skipped:', err.message)
+    }
+  }
+  return linkCard(sock, { url, title, description, image })
+}
+
+async function buildPreview(sock, url, id) {
+  const info = await bookInfo(id)
+  return linkCard(sock, { url, title: info.title, description: info.description, image: info.image })
 }
 
 // Returns the message content with a link preview added when it has

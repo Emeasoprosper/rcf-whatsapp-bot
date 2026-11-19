@@ -12,6 +12,7 @@ import { logActivity } from './activity.js'
 import { quoteCard, coverCard, HANDLE } from './quoteImage.js'
 import { featuredCandidates } from './library.js'
 import { maybeSendSticker } from './stickers.js'
+import { linkCardFromImageUrl } from './linkPreview.js'
 
 // Things the bot posts on its own: admin announcements (ticked "post to
 // WhatsApp" in the admin app), "upload to the library" adverts, and
@@ -56,23 +57,43 @@ const TYPE_HEADER = {
   advert: '✨ *SPONSORED*',
 }
 
-function announcementCaption(item) {
+// withLinks false: the link goes in the tappable card sent right after the
+// picture instead, so the caption stays clean.
+function announcementCaption(item, { withLinks = true } = {}) {
   const lines = [TYPE_HEADER[item.type] || '📢', '', `*${item.title}*`, '', item.message]
-  if (item.link_url) lines.push('', `🔗 ${item.link_url}`)
-  if (item.type !== 'advert') lines.push('', `More on the library app: ${config.siteUrl}/news/${item.id}`)
+  if (withLinks && item.link_url) lines.push('', `🔗 ${item.link_url}`)
+  if (withLinks && item.type !== 'advert') lines.push('', `More on the library app: ${config.siteUrl}/news/${item.id}`)
   return lines.join('\n').slice(0, 3500)
+}
+
+// The tappable card under a picture post (WhatsApp can't put a link card on
+// a picture, and real buttons don't work for bots like this one in groups).
+async function announcementCard(sock, item) {
+  const url = item.link_url || (item.type !== 'advert' ? `${config.siteUrl}/news/${item.id}` : null)
+  if (!url) return null
+  const ours = url.startsWith(config.siteUrl)
+  const card = await linkCardFromImageUrl(sock, {
+    url,
+    title: ours ? 'RCF MOUAU Library' : new URL(url).hostname.replace(/^www\./, ''),
+    description: ours ? 'Books, past questions and lecture notes. Free for every member.' : item.title,
+    imageUrl: item.attachment_url,
+  })
+  return { url, card, text: `👉 *Tap to open:* ${url}` }
 }
 
 const imageFailures = new Map()
 
 async function postAnnouncement(sock, item) {
-  const caption = announcementCaption(item)
   const mime = item.attachment_mime || ''
   const useImage = item.attachment_url && mime.startsWith('image/') && (imageFailures.get(item.id) || 0) < MAX_IMAGE_FAILURES
+  // Built once (one upload), then reused for every group.
+  const link = useImage ? await announcementCard(sock, item).catch((err) => { console.error('Announcement card skipped:', err.message); return null }) : null
+  const caption = announcementCaption(item, { withLinks: !link })
 
   for (const jid of allowedGroups()) {
     if (useImage) {
       await send(sock, jid, { image: { url: item.attachment_url }, caption }, caption)
+      if (link) await send(sock, jid, { text: link.text, linkPreview: link.card }, link.text).catch((err) => console.error('Announcement card not sent:', err.message))
     } else if (item.attachment_url && mime === 'application/pdf') {
       await send(sock, jid, { text: caption }, caption)
       await sock.sendMessage(jid, {
