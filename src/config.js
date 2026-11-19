@@ -7,7 +7,7 @@ const num = (value, fallback) => {
 }
 
 export const config = {
-  backendUrl: (process.env.BACKEND_URL || 'https://rcf-library-backend.onrender.com').replace(/\/+$/, ''),
+  backendUrl: (process.env.BACKEND_URL || 'https://rcf-library-backend-b3g4.onrender.com').replace(/\/+$/, ''),
   siteUrl: (process.env.SITE_URL || 'https://rcf-mouau-library.vercel.app').replace(/\/+$/, ''),
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   // Same default your backend uses in rcf-library-backend/src/services/aiAnalysis.js.
