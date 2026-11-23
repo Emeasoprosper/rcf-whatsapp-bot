@@ -220,14 +220,15 @@ async function onPrivateMessage(sock, m, jid) {
   if (msg.stickerMessage || msg.videoMessage?.gifPlayback) {
     if (msg.stickerMessage && isStickerTeacher(m, jid)) return learnFromOwner(sock, m, jid)
     const kind = visualKind(msg)
-    const meaning = takeAiCall()
-      ? await readVisual(sock, m, msg).catch((err) => {
+    await loadChat(jid)
+    const seen = takeAiCall()
+      ? await readVisual(sock, m, msg, { history: recentChat(jid), quoted: readText(unwrap(readContext(msg).quotedMessage) || {}), senderName: m.pushName || '' }).catch((err) => {
           console.error(`Reading a ${kind} failed:`, err.message)
-          return ''
+          return null
         })
-      : ''
-    if (!meaning) return // couldn't watch it: no blind 😂
-    visualText = `[${kind}: ${meaning}]`
+      : null
+    if (!seen) return void remember(jid, { name: m.pushName || '', text: `[sent a ${kind}]` }) // no blind 😂
+    visualText = seen.text
   }
 
   // A file for the library (past questions, notes…): Bro Paul adds it.
@@ -249,8 +250,10 @@ async function onPrivateMessage(sock, m, jid) {
   const senderName = m.pushName || ''
   await loadChat(jid) // what they talked about before a restart
   const history = recentChat(jid)
-  remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
-  logChat({ chatJid: jid, chatName: senderName, senderName, kind: isVoice ? 'voice' : 'text', text })
+  // What was seen in a sticker is only for answering it: never saved.
+  const saved = visualText ? `[sent a ${visualKind(msg)}]` : text
+  remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : saved })
+  logChat({ chatJid: jid, chatName: senderName, senderName, kind: isVoice ? 'voice' : 'text', text: saved })
 
   if (isThanksOnly(text)) {
     // Now and then a "thank you" sticker instead of the heart.
@@ -358,21 +361,20 @@ async function onMessage(sock, m) {
         remember(jid, { name: m.pushName || '', text: `[sent a ${kind}]` })
         return
       }
-      const meaning = takeAiCall()
-        ? await readVisual(sock, m, msg).catch((err) => {
+      const quoted = toBot ? readText(unwrap(visualCtx.quotedMessage) || {}) : last?.text || ''
+      const seen = takeAiCall()
+        ? await readVisual(sock, m, msg, { history: before, quoted, senderName: m.pushName || '' }).catch((err) => {
             console.error(`Reading a ${kind} failed:`, err.message)
-            return ''
+            return null
           })
-        : ''
-      if (!meaning) {
-        // Couldn't watch it: stay quiet. A blind 😂 on a sad or confused one is worse.
+        : null
+      if (!seen) {
+        // Couldn't watch it, or no clear meaning: stay quiet, no blind 😂.
         remember(jid, { name: m.pushName || '', text: `[sent a ${kind}]` })
         return
       }
-      const quoted = toBot ? readText(unwrap(visualCtx.quotedMessage) || {}).replace(/\s+/g, ' ').slice(0, 120) : ''
-      text = `[${kind}${quoted ? ` replying to your message "${quoted}"` : ''}: ${meaning}]`
+      text = seen.text
       visualToBot = true
-      console.log(`[visual] ${kind} for Bro Paul: ${meaning}`)
     } else {
       // A shared file with no caption: probably materials, worth a heart.
       if (!fromMe && hasDocument && shouldReact(jid, { text: '', hasDocument })) await react()
@@ -393,7 +395,9 @@ async function onMessage(sock, m) {
   // History is taken before this message is added, so the AI sees it once.
   await loadChat(jid)
   const history = recentChat(jid)
-  if (!fromMe) remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : text })
+  // What was seen in a sticker is only for answering it: never saved.
+  const saved = visualToBot ? `[sent a ${visualKind(msg)}]` : text
+  if (!fromMe) remember(jid, { name: senderName, text: isVoice ? `(voice note) ${text}` : saved })
 
   // Prayer session: no banter. Depending on the group's setting, 🙏 the
   // prayers and now and then add a short prayer. Talking to Bro Paul
@@ -475,7 +479,7 @@ async function onMessage(sock, m) {
   })
 
   // A message Bro Paul answers goes to the chat log, just before his reply.
-  if (raw && !fromMe) logChat({ chatJid: jid, senderName, kind: isVoice ? 'voice' : 'text', text })
+  if (raw && !fromMe) logChat({ chatJid: jid, senderName, kind: isVoice ? 'voice' : 'text', text: saved })
 
   if (raw && REACT_MARKER.test(raw)) {
     // The AI couldn't answer a casual message: react like a person instead.
@@ -495,7 +499,7 @@ async function onMessage(sock, m) {
       if (reply.startsWith('Hello everyone! 👋')) rememberPost(jid, sent?.key, 'intro', { signature: introSignature(jid) })
       remember(jid, { text: reply, fromBot: true, kind: spoken ? 'voice' : 'text' })
       const kind = /^Here's what I found|^I couldn't find/.test(reply) ? 'search' : 'reply'
-      logActivity(kind, jid, `${senderName || 'Member'}: "${text.slice(0, 80)}" → ${reply.slice(0, 120)}`)
+      logActivity(kind, jid, `${senderName || 'Member'}: "${saved.slice(0, 80)}" → ${reply.slice(0, 120)}`)
     }
     if (sticker && !inPrayer(jid)) await maybeSendSticker(sock, jid, sticker)
     return

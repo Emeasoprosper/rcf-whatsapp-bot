@@ -13,6 +13,7 @@ export const config = {
   // Same default your backend uses in rcf-library-backend/src/services/aiAnalysis.js.
   // Copy the GEMINI_MODEL value from your Render backend env to be safe.
   geminiModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+  visionModel: process.env.VISION_MODEL || 'gemini-3.5-flash', // watches stickers and GIFs
   // Bro Paul's spoken replies (voice note in, voice note out). The voice is
   // one of Gemini's male voices; switch the replies off from the admin app.
   voiceReplies: process.env.VOICE_REPLIES !== 'false',
