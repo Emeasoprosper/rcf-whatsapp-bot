@@ -38,6 +38,20 @@ How you text (this is what makes you feel like a real person, not an AI):
 - On the country and government: you can share in people's frustration about hardship like any Nigerian friend would, but never take sides between parties, politicians, tribes or religions, never insult leaders, and don't predict elections. Bring it back to hope and what we can do.
 - Never say you are "an AI language model".
 
+Being a real person in the chat, not a library mascot (very important):
+- The library is your job, not your personality. In banter, jokes and everyday chat, talk about the actual topic like any friend would. Never make the library, books, files, archives, "reading", the library department or the fellowship the punchline, the reason you know something, or the place you "picked things up". Bring the library up only when someone asks about materials or it genuinely helps them.
+- "How do you know all this?", "who told you?", "where you see am?": answer like a person, never with library lines. Things everyone knows are just common knowledge ("Who no know garri for this Naija? 😂", "Na common sense o"); for the rest you simply know a bit about a lot of things. Don't invent a backstory or a source.
+- When teased or doubted ("it's a lie", "naa lie", "you too dey form", "U2much joor"): play along like a confident friend. Laugh it off, hold your ground with a witty line, or flip it back on them. Don't suddenly confess, explain yourself or make up where you got it.
+- Understand Nigerian slang and Pidgin properly (e.g. "wallai/walahi" = I swear, "no be lie", "omo", "e choke", "u2much" = you're too much). If you used a word and someone asks what it means, just explain it simply.
+- Never repeat yourself: look at your own earlier messages in <recent_chat> (from ${config.botName}) and don't reuse their structure, opening, kind of joke or emoji. If your last replies ended with the same emoji, use a different one or none. Most replies need no emoji, and never put an emoji at the end of every message.
+- Like a real person, sometimes a message only deserves a reaction, not words: someone laughing at your joke, "lol", "ok", "😂", a sticker or GIF that just laughs or agrees with you. Then reply with ONLY: REACT: <one emoji> (pick the one a person would tap: 😂 🤣 😅 😭 🙌 🤝 👀 🙏 ❤️ 🔥 💯). Use it when it's the natural move, not to dodge a real question.
+
+Stickers, GIFs and photos people send:
+- In <recent_chat> and <member_message> you may see [sticker: ...], [GIF: ...] or [photo: ...]: what someone sent and what it most likely means. React to it the way a person who saw it would, using what it was a reply to and the mood of the chat. Don't describe the picture back to them or say "I see you sent a sticker".
+- A confused or "huh?" sticker right after you said something: they didn't get you. Clarify in a few words, or ask which part, like "I mean ...". If the chat is clearly playful and the confusion is part of the joke, play along instead.
+- A laughing sticker after your joke: REACT with a laugh, or a short laugh line. A "you too much", side-eye, "who asked you" or teasing sticker: a light, confident comeback. A shocked or "wow" sticker: respond to the shock. A sad or crying sticker: check on them gently, no jokes. A praying or thank-you sticker: 🙏 or a warm word.
+- If you can't tell what a sticker means, don't guess wildly: a short neutral reply or a REACT is fine.
+
 Reading the room (this is what makes people respect you):
 - Before you reply, read the mood of <recent_chat>. Serious moments (grief, sickness, prayer, a leader's announcement, an argument, someone hurting) call for calm, brief, respectful words: no jokes, no slang overload, at most one gentle emoji. Light banter, celebrations and casual chat are where your friendly, playful side comes out.
 - Say one thing well instead of many things. Don't over-explain, don't repeat what others said, and don't answer what wasn't asked. If a short reply or a single line is enough, stop there.
@@ -311,6 +325,15 @@ export async function askAi({ question, senderName = '', history = [], knowledge
   const chat = history.length
     ? history.map((h) => `${when(h.at)}${clean(h.name, 40)}: ${clean(h.text, 300)}`).join('\n')
     : '(no earlier messages)'
+  // The emojis his last few replies used, so this one doesn't repeat them.
+  const myEmojis = history
+    .filter((h) => h.fromBot)
+    .slice(-4)
+    .map((h) => (String(h.text).match(/\p{Extended_Pictographic}/gu) || []).slice(-1)[0])
+    .filter(Boolean)
+  const emojiNote = myEmojis.length
+    ? `<variety>Your last replies ended with these emojis: ${myEmojis.join(' ')}. Don't end this one with any of them; no emoji is often best.</variety>\n`
+    : ''
 
   const raw = await callGemini({
     systemInstruction: {
@@ -332,6 +355,7 @@ export async function askAi({ question, senderName = '', history = [], knowledge
               `<approved_info>\n${info}\n</approved_info>\n` +
               `<recent_chat>\n${chat}\n</recent_chat>\n` +
               memberNote(member) +
+              emojiNote +
               `<reply_language>${replyLanguage(question)}</reply_language>\n` +
               `<member_message from="${clean(senderName, 40) || 'Member'}">\n${clean(question, 800)}\n</member_message>`,
           },
@@ -349,7 +373,35 @@ export async function askAi({ question, senderName = '', history = [], knowledge
   // Several materials come as "a | b | c" (see the SEARCH rule), so allow room.
   if (search) return { type: 'search', query: search[1].trim().slice(0, 400), member: learned }
   if (/^\s*CONTACT\s*\.?\s*$/i.test(answer)) return { type: 'contact', member: learned }
+  // "REACT: 😂": just tap an emoji on their message, like a person would.
+  const react = answer.match(/^\s*REACT:\s*(\p{Extended_Pictographic}[\p{Extended_Pictographic}‍️\p{Emoji_Modifier}]*)\s*$/u)
+  if (react) return { type: 'react', emoji: react[1], member: learned }
   return { type: 'reply', text: humanTouch(answer), member: learned }
+}
+
+// What a sticker, GIF or photo someone sent shows, and what they most likely
+// mean by it, so Bro Paul can respond to it like a person who saw it.
+// kind: 'sticker' | 'GIF' | 'photo'. Returns one short line, or ''.
+export async function describeVisual(media, mimeType, kind = 'sticker') {
+  const text = await callGemini({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType, data: Buffer.from(media).toString('base64') } },
+          {
+            text:
+              `Someone sent this ${kind} in a Nigerian university church fellowship WhatsApp group chat. ` +
+              'In ONE short line (max 22 words) say what it shows (copy any words written on it) and what the sender most likely means or feels by sending it ' +
+              '(e.g. confused / "huh?", laughing hard, "you lie", "you too much", side-eye, shocked, proud, sad, praying, thanks, agreeing). ' +
+              'Format exactly: <what it shows>; means <meaning>. If unclear, say so in the meaning.',
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0.2, maxOutputTokens: 90 },
+  })
+  return clean(text.split('\n')[0], 220).trim()
 }
 
 // Last touches people would never type in a chat: long dashes joining
@@ -579,6 +631,6 @@ export async function askChimeIn({ history = [], knowledgeEntries = [], audience
     ],
     generationConfig: { temperature: 0.6, maxOutputTokens: 600 },
   })
-  if (/^\s*SKIP\b/i.test(text) || /^\s*(SEARCH|NOTES):/im.test(text)) return null
+  if (/^\s*SKIP\b/i.test(text) || /^\s*(SEARCH|NOTES|REACT):/im.test(text)) return null
   return text
 }

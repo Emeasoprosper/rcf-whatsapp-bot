@@ -23,6 +23,7 @@ import { initState, getState, setState } from './state.js'
 import { startLiveSettings } from './liveSettings.js'
 import { startActivityLog, logActivity } from './activity.js'
 import { handleIncomingMaterial, completePendingMaterial } from './materials.js'
+import { visualKind, readVisual } from './visuals.js'
 
 const QR_FILE = 'qr.png'
 const GROUP_REFRESH_MS = 60 * 1000
@@ -213,25 +214,35 @@ async function onPrivateMessage(sock, m, jid) {
   const msg = unwrap(m.message)
   if (!msg) return
 
-  // Stickers sent to the bot: the owner is teaching the pack. Others are ignored.
-  if (msg.stickerMessage) {
-    if (isStickerTeacher(m, jid)) return learnFromOwner(sock, m, jid)
-    // Not a teacher: laugh along instead of ignoring it.
-    console.log(`[stickers] Sticker from ${bareId(jid)} not learned (only teachers can add stickers; see STICKER_TEACHERS).`)
-    await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
-    return
+  // Stickers sent to the bot: the owner is teaching the pack. From anyone
+  // else (and GIFs), he looks at it and answers it like part of the chat.
+  let visualText = ''
+  if (msg.stickerMessage || msg.videoMessage?.gifPlayback) {
+    if (msg.stickerMessage && isStickerTeacher(m, jid)) return learnFromOwner(sock, m, jid)
+    const kind = visualKind(msg)
+    const meaning = takeAiCall()
+      ? await readVisual(sock, m, msg).catch((err) => {
+          console.error(`Reading a ${kind} failed:`, err.message)
+          return ''
+        })
+      : ''
+    if (!meaning) {
+      await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
+      return
+    }
+    visualText = `[${kind}: ${meaning}]`
   }
 
   // A file for the library (past questions, notes…): Bro Paul adds it.
-  if (await handleIncomingMaterial(sock, m, msg, { jid, isGroup: false, senderId: jid, senderName: m.pushName || '' })) return
+  if (!visualText && (await handleIncomingMaterial(sock, m, msg, { jid, isGroup: false, senderId: jid, senderName: m.pushName || '' }))) return
 
   const isVoice = Boolean(msg.audioMessage)
   if (isVoice) sock.readMessages([m.key]).catch(() => {})
-  let text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
+  let text = visualText || (isVoice ? await voiceText(sock, m, msg, jid) : readText(msg))
   if (!text) return
-  if (!isVoice) text = await withQuotedVoice(sock, m, jid, text, readContext(msg))
+  if (!isVoice && !visualText) text = await withQuotedVoice(sock, m, jid, text, readContext(msg))
   // Their answer to "Is it for the library? Send the course code".
-  if (!isVoice && (await completePendingMaterial(sock, jid, text, { senderId: jid, senderName: m.pushName || '' }))) return
+  if (!isVoice && !visualText && (await completePendingMaterial(sock, jid, text, { senderId: jid, senderName: m.pushName || '' }))) return
 
   if (!isVoice && isStickerTeacher(m, jid)) {
     const answer = await stickerCommand(text)
@@ -254,7 +265,7 @@ async function onPrivateMessage(sock, m, jid) {
   // Blue ticks + "typing…" while the AI thinks, like a real person.
   sock.readMessages([m.key]).catch(() => {})
   sock.sendPresenceUpdate('composing', jid).catch(() => {})
-  const raw = await handlePrivateMessage({ id: m.key.id, senderId: jid, senderName, text, history })
+  const raw = await handlePrivateMessage({ id: m.key.id, senderId: jid, senderName, text, history, isVisual: Boolean(visualText) })
   sock.sendPresenceUpdate('paused', jid).catch(() => {})
   if (!raw) return
 
@@ -332,28 +343,53 @@ async function onMessage(sock, m) {
   const voiceToBot = !fromMe && voiceCtx?.quotedMessage && botIds(sock).includes(bareId(voiceCtx.participant))
   const isVoice = Boolean(voiceToBot)
   let text = isVoice ? await voiceText(sock, m, msg, jid) : readText(msg)
+  // A sticker, GIF or photo (no caption) that answers Bro Paul: he looks at
+  // it, understands what it means in the conversation and responds like a
+  // person who saw it. Others are just noted, so he knows the chat's mood.
+  let visualToBot = false
   if (!text) {
-    // Someone answered Bro Paul with a sticker, GIF or picture: laugh along
-    // like a person would (a 😂 reaction, or now and then a funny sticker back).
-    const visual = msg.stickerMessage || msg.imageMessage || msg.videoMessage
-    const visualCtx = readContext(msg)
-    const toBot = visual && visualCtx.quotedMessage && botIds(sock).includes(bareId(visualCtx.participant))
-    if (!fromMe && toBot) {
-      if (!(await maybeSendSticker(sock, jid, 'funny', { chance: 0.4 }))) {
-        await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
+    const kind = fromMe ? null : visualKind(msg)
+    if (kind) {
+      const visualCtx = readContext(msg)
+      const toBot = Boolean(visualCtx.quotedMessage) && botIds(sock).includes(bareId(visualCtx.participant))
+      await loadChat(jid)
+      const before = recentChat(jid)
+      const last = before[before.length - 1]
+      // Sent right after Bro Paul spoke, before anyone else did: it's about him.
+      const afterBot = !toBot && Boolean(last?.fromBot) && Date.now() - last.at < 3 * 60 * 1000
+      if (!toBot && !afterBot) {
+        remember(jid, { name: m.pushName || '', text: `[sent a ${kind}]` })
+        return
       }
+      const meaning = takeAiCall()
+        ? await readVisual(sock, m, msg).catch((err) => {
+            console.error(`Reading a ${kind} failed:`, err.message)
+            return ''
+          })
+        : ''
+      if (!meaning) {
+        // Couldn't look at it (busy, or today's AI limit): laugh along, as before.
+        if (toBot && !(await maybeSendSticker(sock, jid, 'funny', { chance: 0.4 }))) {
+          await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
+        }
+        return
+      }
+      const quoted = toBot ? readText(unwrap(visualCtx.quotedMessage) || {}).replace(/\s+/g, ' ').slice(0, 120) : ''
+      text = `[${kind}${quoted ? ` replying to your message "${quoted}"` : ''}: ${meaning}]`
+      visualToBot = true
+      console.log(`[visual] ${kind} for Bro Paul: ${meaning}`)
+    } else {
+      // A shared file with no caption: probably materials, worth a heart.
+      if (!fromMe && hasDocument && shouldReact(jid, { text: '', hasDocument })) await react()
       return
     }
-    // A shared file with no caption: probably materials, worth a heart.
-    if (!fromMe && hasDocument && shouldReact(jid, { text: '', hasDocument })) await react()
-    return
   }
 
   const ctx = readContext(msg)
   const ids = botIds(sock)
   const mentioned = ctx.mentionedJid || []
   const mentionedBot = mentioned.some((j) => ids.includes(bareId(j)))
-  const repliedToBot = Boolean(ctx.quotedMessage) && ids.includes(bareId(ctx.participant))
+  const repliedToBot = visualToBot || (Boolean(ctx.quotedMessage) && ids.includes(bareId(ctx.participant)))
   const senderName = m.pushName || ''
   const senderId = m.key.participant || jid
   // "@Bro Paul" as a reply to someone's voice note: listen to it and answer.
@@ -390,7 +426,7 @@ async function onMessage(sock, m) {
     return
   }
 
-  if (!fromMe && config.birthdayWishes && groupSettings(jid).birthdays && isBirthdayWish(text)) {
+  if (!fromMe && !visualToBot && config.birthdayWishes && groupSettings(jid).birthdays && isBirthdayWish(text)) {
     if (shouldReact(jid, { text, birthday: true })) await react()
     // What the wish replies to (a flyer someone posted, or the person's own
     // news), so Bro Paul wishes the real celebrant, not whoever posted.
@@ -439,6 +475,7 @@ async function onMessage(sock, m) {
     fromMe,
     mentionedBot,
     repliedToBot,
+    isVisual: visualToBot,
     history,
   })
 

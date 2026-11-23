@@ -678,6 +678,8 @@ export const REACT_MARKER = /^\[\[react:(.{1,8})\]\]$/u
 const reactWith = (emoji) => `[[react:${emoji}]]`
 
 function humanFallback(text, { tired = false } = {}) {
+  // A sticker/GIF/photo he couldn't answer: just react, like a person.
+  if (/^\[(sticker|GIF|photo)\b/.test(text)) return reactWith(/sad|cry|pray|thank/i.test(text) ? '🙏' : '😂')
   const t = stripMentions(text)
   const casual = t.length <= 50 && !/\?/.test(t) && !looksLikeResourceRequest(t)
   if (casual) return reactWith(/😂|🤣|😆|😅|lol|lmao|haha/i.test(t) ? '😂' : /🙏|thank|amen/i.test(t) ? '🙏' : '🤍')
@@ -717,6 +719,8 @@ async function aiReply(text, { senderName, senderId = '', groupId = null, histor
     // Business or a request for the owner: the direct contact in DM (the AI
     // has talked it through first), an invite to the DM in a group.
     if (result.type === 'contact') return isPrivate ? businessReply() : dmInviteReply()
+    // Just an emoji on their message (index.js turns this into a reaction).
+    if (result.type === 'react') return reactWith(result.emoji)
     return result.text
   } catch (err) {
     console.error('AI reply failed after retries:', err.message)
@@ -775,6 +779,12 @@ export async function handlePrivateMessage(msg) {
   if (alreadySeen(msg.id)) return null
   const text = msg.text.trim()
   if (!text) return null
+
+  // A sticker or GIF ("[sticker: ...]"): straight to the AI as part of the chat.
+  if (msg.isVisual) {
+    const reply = await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], isPrivate: true, member: memberFor(msg.senderId) })
+    return reply ? reply.slice(0, 1800) : null
+  }
 
   // Business enquiries go to the AI below, which talks them through and
   // hands over the contact when it's time.
@@ -873,6 +883,16 @@ export async function handleMessage(msg) {
   if (acceptedContactOffer(msg.senderId, text)) {
     senderLastTagged.set(msg.senderId, Date.now())
     return contactReply()
+  }
+
+  // A sticker/GIF/photo for Bro Paul arrives as "[sticker: ...]": straight
+  // to the AI, never read as a book request or "who are you".
+  if (msg.isVisual) {
+    if (Date.now() - (senderLastTagged.get(msg.senderId) || 0) < 4000) return null
+    senderLastTagged.set(msg.senderId, Date.now())
+    const { audience: aud, revealAi: reveal } = groupSettings(msg.groupId)
+    const reply = await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, groupId: msg.groupId, history: msg.history || [], audience: aud, praying: inPrayer(msg.groupId), revealAi: reveal })
+    return reply ? reply.slice(0, 1800) : null
   }
 
   const introWords = INTRO_WORDS.test(text)
