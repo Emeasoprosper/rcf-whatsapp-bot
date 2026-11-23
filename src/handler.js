@@ -678,8 +678,8 @@ export const REACT_MARKER = /^\[\[react:(.{1,8})\]\]$/u
 const reactWith = (emoji) => `[[react:${emoji}]]`
 
 function humanFallback(text, { tired = false } = {}) {
-  // A sticker/GIF/photo he couldn't answer: just react, like a person.
-  if (/^\[(sticker|GIF|photo)\b/.test(text)) return reactWith(/sad|cry|pray|thank/i.test(text) ? '🙏' : '😂')
+  // A sticker/GIF/video/photo he couldn't answer: stay quiet, never a blind 😂.
+  if (/^\[(sticker|GIF|video|photo)\b/.test(text)) return null
   const t = stripMentions(text)
   const casual = t.length <= 50 && !/\?/.test(t) && !looksLikeResourceRequest(t)
   if (casual) return reactWith(/😂|🤣|😆|😅|lol|lmao|haha/i.test(t) ? '😂' : /🙏|thank|amen/i.test(t) ? '🙏' : '🤍')
@@ -780,8 +780,10 @@ export async function handlePrivateMessage(msg) {
   const text = msg.text.trim()
   if (!text) return null
 
-  // A sticker or GIF ("[sticker: ...]"): straight to the AI as part of the chat.
+  // A sticker or GIF ("[sticker: ...]"): straight to the AI as part of the
+  // chat, counted in the person's daily limit like any other message.
   if (msg.isVisual) {
+    if (privateLimitReached(msg.senderId) !== false) return null
     const reply = await aiReply(text, { senderName: msg.senderName, senderId: msg.senderId, history: msg.history || [], isPrivate: true, member: memberFor(msg.senderId) })
     return reply ? reply.slice(0, 1800) : null
   }

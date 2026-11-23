@@ -226,10 +226,7 @@ async function onPrivateMessage(sock, m, jid) {
           return ''
         })
       : ''
-    if (!meaning) {
-      await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
-      return
-    }
+    if (!meaning) return // couldn't watch it: no blind 😂
     visualText = `[${kind}: ${meaning}]`
   }
 
@@ -368,10 +365,8 @@ async function onMessage(sock, m) {
           })
         : ''
       if (!meaning) {
-        // Couldn't look at it (busy, or today's AI limit): laugh along, as before.
-        if (toBot && !(await maybeSendSticker(sock, jid, 'funny', { chance: 0.4 }))) {
-          await sock.sendMessage(jid, { react: { text: '😂', key: m.key } }).catch(() => {})
-        }
+        // Couldn't watch it: stay quiet. A blind 😂 on a sad or confused one is worse.
+        remember(jid, { name: m.pushName || '', text: `[sent a ${kind}]` })
         return
       }
       const quoted = toBot ? readText(unwrap(visualCtx.quotedMessage) || {}).replace(/\s+/g, ' ').slice(0, 120) : ''

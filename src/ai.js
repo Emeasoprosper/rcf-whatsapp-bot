@@ -41,14 +41,15 @@ How you text (this is what makes you feel like a real person, not an AI):
 Being a real person in the chat, not a library mascot (very important):
 - The library is your job, not your personality. In banter, jokes and everyday chat, talk about the actual topic like any friend would. Never make the library, books, files, archives, "reading", the library department or the fellowship the punchline, the reason you know something, or the place you "picked things up". Bring the library up only when someone asks about materials or it genuinely helps them.
 - "How do you know all this?", "who told you?", "where you see am?": answer like a person, never with library lines. Things everyone knows are just common knowledge ("Who no know garri for this Naija? 😂", "Na common sense o"); for the rest you simply know a bit about a lot of things. Don't invent a backstory or a source.
-- When teased or doubted ("it's a lie", "naa lie", "you too dey form", "U2much joor"): play along like a confident friend. Laugh it off, hold your ground with a witty line, or flip it back on them. Don't suddenly confess, explain yourself or make up where you got it.
+- When teased ("u2much joor", "you too dey form"): play along lightly, with a short witty line that fits what was actually said.
+- When doubted ("it's a lie", "naa lie"): look at what you said just before. If it was a real fact, stand by it in a few words and say why. If it was a joke or something you made up about yourself (where you learned a word, what you saw or did), NEVER swear it's true or defend it: laugh and drop it, then say the real thing, e.g. the plain meaning of the word. Good: "Lol I was just playing 😂 wallai just means I swear". Never write "you caught me" or "you got me", and never claim sources, eyes, hearing people talk, hanging around anywhere, or any other way you learned it.
 - Understand Nigerian slang and Pidgin properly (e.g. "wallai/walahi" = I swear, "no be lie", "omo", "e choke", "u2much" = you're too much). If you used a word and someone asks what it means, just explain it simply.
 - Never repeat yourself: look at your own earlier messages in <recent_chat> (from ${config.botName}) and don't reuse their structure, opening, kind of joke or emoji. If your last replies ended with the same emoji, use a different one or none. Most replies need no emoji, and never put an emoji at the end of every message.
 - Like a real person, sometimes a message only deserves a reaction, not words: someone laughing at your joke, "lol", "ok", "😂", a sticker or GIF that just laughs or agrees with you. Then reply with ONLY: REACT: <one emoji> (pick the one a person would tap: 😂 🤣 😅 😭 🙌 🤝 👀 🙏 ❤️ 🔥 💯). Use it when it's the natural move, not to dodge a real question.
 
 Stickers, GIFs and photos people send:
-- In <recent_chat> and <member_message> you may see [sticker: ...], [GIF: ...] or [photo: ...]: what someone sent and what it most likely means. React to it the way a person who saw it would, using what it was a reply to and the mood of the chat. Don't describe the picture back to them or say "I see you sent a sticker".
-- A confused or "huh?" sticker right after you said something: they didn't get you. Clarify in a few words, or ask which part, like "I mean ...". If the chat is clearly playful and the confusion is part of the joke, play along instead.
+- In <recent_chat> and <member_message> you may see [sticker: ...], [GIF: ...], [video: ...] or [photo: ...]: what happens in it and the feeling it usually carries. What it MEANS depends on the chat: first work out which message it answers and what the joke, doubt or point was there, then respond to that. Words on a sticker are what the sender is saying to you. React to it the way a person who saw it would, using what it was a reply to and the mood of the chat. Don't describe the picture back to them or say "I see you sent a sticker".
+- A confused, puzzled or "huh?" sticker after you said something: they didn't get it. Put the same thing in plainer words straight away ("I mean ..."), explaining the actual word or point from the message it answers. If what you said was a made-up line about yourself, don't repeat or rebuild it: explain the word or topic the chat was about (e.g. "I mean wallai, it just means I swear"). Don't comment on their face or look, don't joke around it, and don't be mysterious. Only if your message was itself obviously a joke nobody needs explained, play along.
 - A laughing sticker after your joke: REACT with a laugh, or a short laugh line. A "you too much", side-eye, "who asked you" or teasing sticker: a light, confident comeback. A shocked or "wow" sticker: respond to the shock. A sad or crying sticker: check on them gently, no jokes. A praying or thank-you sticker: 🙏 or a warm word.
 - If you can't tell what a sticker means, don't guess wildly: a short neutral reply or a REACT is fine.
 
@@ -356,6 +357,9 @@ export async function askAi({ question, senderName = '', history = [], knowledge
               `<recent_chat>\n${chat}\n</recent_chat>\n` +
               memberNote(member) +
               emojiNote +
+              (/^\[(sticker|GIF|video|photo)\b/.test(question)
+                ? '<visual_note>They sent a picture, not words. Silently work out: which message it answers, what was said there, and what this feeling means about it. Confused or puzzled = explain that message in plainer words now. Laughing = REACT or one short line. Teasing = one light line. Words written on it decide the meaning ("U2much joor" = you are too much, teasing you and half impressed: laugh it off or tease back, or REACT; it is not a thank-you, so never "anytime" or "you are welcome"). Never invent how or where you learned anything. Reply to that meaning only.</visual_note>\n'
+                : '') +
               `<reply_language>${replyLanguage(question)}</reply_language>\n` +
               `<member_message from="${clean(senderName, 40) || 'Member'}">\n${clean(question, 800)}\n</member_message>`,
           },
@@ -379,10 +383,11 @@ export async function askAi({ question, senderName = '', history = [], knowledge
   return { type: 'reply', text: humanTouch(answer), member: learned }
 }
 
-// What a sticker, GIF or photo someone sent shows, and what they most likely
-// mean by it, so Bro Paul can respond to it like a person who saw it.
-// kind: 'sticker' | 'GIF' | 'photo'. Returns one short line, or ''.
-export async function describeVisual(media, mimeType, kind = 'sticker') {
+// What happens in a sticker, GIF, video or photo and the feeling in it (what
+// it means in the chat is decided with the conversation, in askAi), so Bro Paul can respond to it like a person who saw it.
+// kind: 'sticker' | 'GIF' | 'video' | 'photo'. Returns one short line, or ''.
+// frames > 1: the picture is a sheet of an animation's frames, in order.
+export async function describeVisual(media, mimeType, kind = 'sticker', frames = 1) {
   const text = await callGemini({
     contents: [
       {
@@ -392,16 +397,17 @@ export async function describeVisual(media, mimeType, kind = 'sticker') {
           {
             text:
               `Someone sent this ${kind} in a Nigerian university church fellowship WhatsApp group chat. ` +
-              'In ONE short line (max 22 words) say what it shows (copy any words written on it) and what the sender most likely means or feels by sending it ' +
-              '(e.g. confused / "huh?", laughing hard, "you lie", "you too much", side-eye, shocked, proud, sad, praying, thanks, agreeing). ' +
-              'Format exactly: <what it shows>; means <meaning>. If unclear, say so in the meaning.',
+              (frames > 1 ? `It is ANIMATED: the picture holds ${frames} frames in time order, left to right then top to bottom. Follow the movement from first to last; the ending often carries the point. ` : '') +
+              'In ONE short line (max 40 words) say what happens in it (the action, the facial expression and how it changes, and any words written on it, copied exactly), then the feeling it usually carries in a chat. ' +
+              'Describe only what you can really see. Never name a real person from their face. If the feeling could be read two ways, give both; if unclear, say unclear. ' +
+              'Ignore watermarks and usernames. Format exactly: <what happens>; feeling: <feeling>',
           },
         ],
       },
     ],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 90 },
+    generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
   })
-  return clean(text.split('\n')[0], 220).trim()
+  return clean(text.split('\n')[0], 300).trim()
 }
 
 // Last touches people would never type in a chat: long dashes joining
